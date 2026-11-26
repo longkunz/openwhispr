@@ -25,7 +25,7 @@ import {
   UserPlus,
   X,
 } from "../icons";
-import { RowCheckbox } from "../dictionary/RowCheckbox";
+import { RowCheckbox } from "../ui/RowCheckbox";
 import { EmptyStateArt } from "../workspace/EmptyStateArt";
 import InviteTeammateDialog from "../InviteTeammateDialog";
 import MemberAvatar from "../MemberAvatar";

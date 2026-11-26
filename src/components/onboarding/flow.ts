@@ -1,5 +1,4 @@
 import { SIGN_IN_PROMPTED_AT_KEY } from "../../utils/requestSignIn";
-import { PENDING_GRAPHICS_PACK_KEY, PENDING_LOCAL_MODELS_KEY } from "./pendingLocalModels";
 import type { PermissionGuideId } from "../../types/permissionGuide";
 
 export const ONBOARDING_SESSION_KEY = "onboardingSessionV2";
@@ -227,8 +226,6 @@ export function resetOnboardingProgress(storage: OnboardingStorage): void {
   storage.removeItem("authenticationSkipped");
   storage.removeItem("skipAuth");
   storage.removeItem("localSetupPending");
-  storage.removeItem(PENDING_LOCAL_MODELS_KEY);
-  storage.removeItem(PENDING_GRAPHICS_PACK_KEY);
   // A restart is not the sign-in that marker announces.
   storage.removeItem(SIGN_IN_PROMPTED_AT_KEY);
   // AppRouter uses this marker to distinguish an explicit restart from a

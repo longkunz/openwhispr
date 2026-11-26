@@ -1,6 +1,11 @@
 import { isEventGuest } from "../helpers/eventAttendees";
 import type { CalendarAttendee } from "../types/calendar";
-import type { NoteAttendee } from "../types/connectors";
+
+export interface NoteAttendee {
+  email: string;
+  name?: string | null;
+  displayName?: string | null;
+}
 
 function isAttendee(value: unknown): value is CalendarAttendee {
   return (

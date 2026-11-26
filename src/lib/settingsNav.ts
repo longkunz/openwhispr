@@ -6,17 +6,13 @@ import {
 } from "../helpers/settingsTargets.js";
 
 export type SettingsSectionType =
-  | "account"
   | "general"
-  | "toneStyle"
   | "hotkeys"
-  | "plansBilling"
   | "workspaceGeneral"
   | "workspacePeople"
   | "workspaceTeamspaces"
   | "workspaceDeveloper"
   | "speechToText"
-  | "llms"
   | "privacyData"
   | "system";
 
@@ -40,14 +36,6 @@ export interface SettingsNavInput {
 // error toast) are live deep-links, not legacy aliases. "workspace" was the
 // single workspace page before it split into General, People and Developer.
 export const SECTION_ALIASES: Record<string, SettingsSectionType> = {
-  aiModels: "llms",
-  agentConfig: "llms",
-  agentMode: "llms",
-  dictationAgent: "llms",
-  intelligence: "llms",
-  meetings: "llms",
-  noteFormatting: "llms",
-  prompts: "llms",
   transcription: "speechToText",
   uploadTranscription: "speechToText",
   noteRecording: "speechToText",
@@ -62,14 +50,6 @@ export const LEGACY_SUB_TAB: Record<string, string> = {
   transcription: "dictation",
   uploadTranscription: "upload",
   noteRecording: "noteRecording",
-  dictationAgent: "dictationAgent",
-  meetings: "noteFormatting",
-  noteFormatting: "noteFormatting",
-  intelligence: "dictationCleanup",
-  agentMode: "chatIntelligence",
-  agentConfig: "chatIntelligence",
-  aiModels: "dictationCleanup",
-  prompts: "dictationCleanup",
 };
 
 const WORKSPACE_SECTIONS: ReadonlySet<SettingsSectionType> = new Set([
@@ -100,14 +80,10 @@ export function buildSettingsNav({
       ];
 
   return [
-    { id: "account", group: "account" },
     { id: "general", group: "account" },
-    { id: "toneStyle", group: "account" },
     { id: "hotkeys", group: "account" },
-    { id: "plansBilling", group: "account" },
     ...workspace,
     { id: "speechToText", group: "aiModels" },
-    { id: "llms", group: "aiModels" },
     { id: "privacyData", group: "system" },
     { id: "system", group: "system" },
   ];
@@ -125,9 +101,9 @@ export function resolveSettingsSection(
   requested: string | undefined,
   available: SettingsNavEntry[]
 ): SettingsSectionType {
-  if (!requested) return "account";
+  if (!requested) return "general";
   if (isPlansBillingTarget(requested)) {
-    return available.some((entry) => entry.id === "plansBilling") ? "plansBilling" : "account";
+    return "general";
   }
   const section = SECTION_ALIASES[requested] ?? requested;
   if (available.some((entry) => entry.id === section)) return section as SettingsSectionType;
@@ -139,7 +115,7 @@ export function resolveSettingsSection(
   ) {
     return "workspaceGeneral";
   }
-  return "account";
+  return "general";
 }
 
 export type WorkspacePlanSection = `plansBilling:workspace:${string}`;

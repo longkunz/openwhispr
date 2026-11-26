@@ -7,7 +7,11 @@ import {
   type Snippet,
 } from "../../utils/snippets";
 import type { ToolDefinition, ToolResult } from "./ToolRegistry";
-import { cleanWordList } from "./dictionaryTool";
+
+function cleanWordList(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  return values.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+}
 
 export interface SnippetActions {
   getSnippets(): Snippet[];

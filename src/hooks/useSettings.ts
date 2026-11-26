@@ -13,8 +13,7 @@ import type {
   InferenceMode,
   SelfHostedType,
 } from "../types/electron";
-import type { Snippet } from "../utils/snippets";
-import type { SharedHintWords } from "../utils/sharedDictionaryHints";
+import type { Snippet, SharedHintWords } from "../utils/snippets";
 import {
   effectiveAudioRetentionDays,
   effectiveLocalHistoryEnabled,
@@ -189,16 +188,9 @@ function useSettingsInternal() {
   const setAutoLearnCorrections = useCallback(
     (enabled: boolean) => {
       setAutoLearnCorrectionsRaw(enabled);
-      window.electronAPI?.setAutoLearnEnabled?.(enabled);
     },
     [setAutoLearnCorrectionsRaw]
   );
-
-  // Sync auto-learn state to main process on mount
-  useEffect(() => {
-    window.electronAPI?.setAutoLearnEnabled?.(autoLearnCorrections);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Retention periods are enforced by the main process cleanup sweep
   const { audioRetentionDays, transcriptRetentionDays, dataRetentionEnabled } = store;

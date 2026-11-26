@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { AUDIO_POLICY_REFUSAL_CODES } = require("./audioPolicyRefusals");
-const { LOCAL_POLICY_CODES } = require("./localModelPolicyGate");
+const LOCAL_POLICY_CODES = new Set();
 
 // A local, append-only record of meeting recordings for an IT log collector
 // (#3029). Meeting audio never reaches the server, and a managed device may run

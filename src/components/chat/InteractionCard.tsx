@@ -18,7 +18,6 @@ import {
 import { answerText } from "../../utils/interactionAnswers";
 import { interactionOutcome } from "./toolCallText";
 import { QuestionsCard } from "./interactions/QuestionsCard";
-import { ConnectionCard } from "./interactions/ConnectionCard";
 import { AccessCard } from "./interactions/AccessCard";
 import { ApiKeyCard } from "./interactions/ApiKeyCard";
 import { SettingsCard } from "./interactions/SettingsCard";
@@ -29,7 +28,7 @@ function CardBody({ entry }: { entry: InteractionEntry }): ReactElement {
     case "questions":
       return <QuestionsCard entry={entry} payload={payload} />;
     case "connection":
-      return <ConnectionCard entry={entry} payload={payload} />;
+      return <></>;
     case "access":
       return <AccessCard entry={entry} payload={payload} />;
     case "apiKey":

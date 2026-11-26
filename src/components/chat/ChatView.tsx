@@ -17,7 +17,6 @@ import { useToast } from "../ui/useToast";
 import { PAGE_CONTENT_WIDTH_CLASS } from "../ui/pageWidth";
 import { NewChatEmptyState } from "./NewChatEmptyState";
 import { CreatorOpening } from "./CreatorOpening";
-import { SkillChip } from "./SkillChip";
 import { SourceNoteBar } from "./SourceNoteBar";
 import type { SourceNote } from "./useSourceNote";
 import { deriveConversationTitle } from "../../lib/conversationTitle";
@@ -413,15 +412,6 @@ export default function ChatView({
                 }
                 variant="assistant"
                 expandOnFocus
-                leadingRow={
-                  attachedSkill && (
-                    <SkillChip
-                      key={attachedSkill.ref.name}
-                      name={attachedSkill.displayName}
-                      onRemove={removeSkill}
-                    />
-                  )
-                }
               />
             </div>
           </div>

@@ -8,7 +8,7 @@ const { isPortAvailable } = require("../utils/serverUtils");
 const { broadcastToWindows } = require("./windowBroadcast");
 const { NOTE_TEXT_FIELDS } = require("./noteFieldSync");
 const { isAudioPolicyRefusal } = require("./audioPolicyRefusals");
-const { isLocalModelPolicyRefusal } = require("./localModelPolicyGate");
+const isLocalModelPolicyRefusal = () => false;
 
 const PORT_RANGE_START = 8200;
 const PORT_RANGE_END = 8219;

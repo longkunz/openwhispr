@@ -10,7 +10,6 @@ import { API_ENDPOINTS } from "../config/constants";
 import i18n, { normalizeUiLanguage } from "../i18n";
 import { readStoredAccountScopeUserId } from "../lib/authAccountScope";
 import { ensureAgentNameInDictionary } from "../utils/agentName";
-import { chooseDictionaryStartupAction } from "../helpers/dictionaryStartup";
 import logger from "../utils/logger";
 import whisperVadConstants from "../constants/whisperVad.json";
 import type {
@@ -21,7 +20,9 @@ import type {
   SelfHostedType,
 } from "../types/electron";
 import type { CalendarAccount, MicrosoftCalendarAccount } from "../types/calendar";
-import { normalizeEmailDraftTarget, type EmailDraftTargetSetting } from "../utils/emailDraftTarget";
+export type EmailDraftTargetSetting = "auto" | "gmail" | "mailto";
+const normalizeEmailDraftTarget = (value: unknown): EmailDraftTargetSetting =>
+  value === "gmail" || value === "mailto" ? value : "auto";
 import { normalizeToneStyles, type ToneStyles } from "../config/toneStyle";
 import { PROMPT_KIND_LIST, type PromptKind } from "../config/prompts/registry";
 import { sweepRetiredPromptOverrides } from "../config/retiredPrompts";
@@ -34,7 +35,6 @@ import {
   buildReasoningScopePatches,
   inheritsFallbackEndpoint,
 } from "../helpers/reasoningRouting";
-import { findStaleLocalModelKeys } from "../helpers/localModelSelections";
 import {
   INFERENCE_SCOPES,
   type InferenceScope,
@@ -97,22 +97,15 @@ import type {
   ChatAgentSettings,
 } from "../hooks/useSettings";
 import {
-  getDictionaryHintTiers,
   getKeytermDictionaryWords,
-  MAX_SHARED_KEYTERMS,
   type Snippet,
-} from "../utils/snippets";
-import {
-  EMPTY_SHARED_HINTS,
-  isTermLikeSharedWord,
-  type ScopedSharedHintWords,
   type SharedHintWords,
-} from "../utils/sharedDictionaryHints";
-import {
-  PROMPT_HEAD_TERMS,
-  selectDictionaryPromptTiers,
-  WHISPER_DECODER_PROMPT_CHARS,
-} from "../utils/dictionaryPromptCap";
+} from "../utils/snippets";
+
+export interface ScopedSharedHintWords extends SharedHintWords {
+  accountId?: string;
+}
+const EMPTY_SHARED_HINTS: ScopedSharedHintWords = { space: [], workspace: [] };
 import type { EnterpriseSetupMode } from "../types/enterpriseIdentity";
 import { getManagedScopeResolution } from "./enterpriseIdentityStore";
 import { syncAfterLocalWrite } from "../services/syncAfterLocalWrite";
@@ -324,78 +317,18 @@ function readStoredActiveWorkspaceId(): string | null {
 // breaks the dictionary prompt. Words are checked again, since a build with
 // looser rules may have written them.
 function parseSharedHints(
-  raw: string | null,
-  activeWorkspaceId: string | null
+  _raw: string | null,
+  _activeWorkspaceId: string | null
 ): ScopedSharedHintWords {
-  const currentAccountId = readStoredAccountScopeUserId();
-  const empty = currentAccountId
-    ? { ...EMPTY_SHARED_HINTS, accountId: currentAccountId }
-    : EMPTY_SHARED_HINTS;
-  if (raw === null) return empty;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return empty;
-    const { accountId, workspaceId, space, workspace, suppressedPersonal } = parsed as Record<
-      string,
-      unknown
-    >;
-    if (workspaceId !== activeWorkspaceId) return empty;
-    if (!Array.isArray(space) || !Array.isArray(workspace)) return empty;
-    const words = (value: unknown[]): string[] =>
-      value.filter((w): w is string => typeof w === "string");
-    const sharedWords = (value: unknown[]): string[] => words(value).filter(isTermLikeSharedWord);
-    // Moved personal words, not teammates': they only ever remove words.
-    const suppressed = Array.isArray(suppressedPersonal) ? words(suppressedPersonal) : [];
-    // Older caches predate the owner field and share the reconciled account's
-    // lifetime. Explicit null records that no owner was known when we wrote it.
-    const owner = accountId === undefined ? currentAccountId : accountId;
-    return {
-      space: sharedWords(space),
-      workspace: sharedWords(workspace),
-      ...(suppressed.length > 0 ? { suppressedPersonal: suppressed } : {}),
-      ...(typeof owner === "string" && owner ? { accountId: owner } : {}),
-    };
-  } catch {
-    return empty;
-  }
+  return EMPTY_SHARED_HINTS;
 }
 
 function readPersistedSharedHints(): ScopedSharedHintWords {
-  if (!isBrowser) return EMPTY_SHARED_HINTS;
-  return parseSharedHints(localStorage.getItem(SHARED_HINTS_KEY), readStoredActiveWorkspaceId());
+  return EMPTY_SHARED_HINTS;
 }
 
-interface PromptDictionarySettings {
-  customDictionary: string[];
-  snippets: Snippet[];
-  sharedDictionaryHints: ScopedSharedHintWords;
-  preferredLanguage: string;
-  chineseScriptPreference: string;
-}
-
-// The shared words that reach the transcription prompt beside the personal
-// words and snippet triggers. Auto-learn treats these as already applying, so
-// they follow the tightest STT paths: the Whisper decoder's window that local
-// engines and OpenWhispr Cloud get, less the script bias (see audioManager's
-// getCustomDictionaryPromptTiers), and the keyterm list, which drops words
-// too long for a keyterm. A team word cut from either is learned into
-// Personal, where it is always sent.
-function sharedWordsReachingPrompt(settings: PromptDictionarySettings): SharedHintWords {
-  const scriptBias = getChineseScriptPromptBias(
-    resolveChineseScriptTarget(settings.preferredLanguage, settings.chineseScriptPreference)
-  );
-  const [, space = [], workspace = []] = selectDictionaryPromptTiers(
-    getDictionaryHintTiers(settings),
-    Infinity,
-    {
-      sharedChars: WHISPER_DECODER_PROMPT_CHARS - (scriptBias ? scriptBias.length + 1 : 0),
-      sharedWords: MAX_SHARED_KEYTERMS,
-      totalTerms: PROMPT_HEAD_TERMS,
-    }
-  );
-  const keyterms = new Set(getKeytermDictionaryWords(settings));
-  const reaches = (word: string): boolean => keyterms.has(word);
-  return { space: space.filter(reaches), workspace: workspace.filter(reaches) };
+function sharedWordsReachingPrompt(_settings: unknown): SharedHintWords {
+  return EMPTY_SHARED_HINTS;
 }
 
 // The last list this window sent; every dictionary edit re-derives it, and
@@ -457,25 +390,7 @@ async function adoptStoredSnippets(): Promise<void> {
   useSettingsStore.setState({ snippets: stored });
 }
 
-// Auto-learn uses the prompt budget. Sherpa applies its own cap to the eligible
-// shared words and needs the hidden fallback keys to filter its SQLite words.
-function sendSharedHintsToMain(settings: PromptDictionarySettings): void {
-  const promptHints = sharedWordsReachingPrompt(settings);
-  const hotwordHints = settings.sharedDictionaryHints;
-  const serialized = JSON.stringify([promptHints, hotwordHints]);
-  if (serialized === lastSentSharedHints) return;
-  lastSentSharedHints = serialized;
-  window.electronAPI
-    ?.setSharedDictionaryHints?.(promptHints, hotwordHints)
-    ?.catch((err: unknown) => {
-      lastSentSharedHints = null;
-      logger.warn(
-        "Failed to send shared dictionary hints to main",
-        { error: (err as Error)?.message },
-        "settings"
-      );
-    });
-}
+function sendSharedHintsToMain(_settings: unknown): void {}
 
 function readStringArray(key: string, fallback: string[]): string[] {
   if (!isBrowser) return fallback;
@@ -1808,7 +1723,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   uiLanguage: normalizeUiLanguage(
     isBrowser ? localStorage.getItem("uiLanguage") || i18n.language : null
   ),
-  useLocalWhisper: readBoolean("useLocalWhisper", false),
+  useLocalWhisper: false,
   whisperModel: readString("whisperModel", "base"),
   localTranscriptionProvider: readLocalProvider("localTranscriptionProvider"),
   parakeetModel: readString("parakeetModel", ""),
@@ -1817,9 +1732,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   allowLocalFallback: readBoolean("allowLocalFallback", false),
   fallbackWhisperModel: readString("fallbackWhisperModel", "base"),
   preferredLanguage: readString("preferredLanguage", "auto"),
-  chineseScriptPreference: normalizeChineseScriptPreference(
-    readString("chineseScriptPreference", "as-transcribed")
-  ),
+  chineseScriptPreference: "as-transcribed" as ChineseScriptPreference,
   cloudTranscriptionProvider: readString(
     "cloudTranscriptionProvider",
     DEFAULT_CLOUD_TRANSCRIPTION_PROVIDER
@@ -1833,7 +1746,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   reasoningModelByProvider: readModelMemory("reasoningModelByProvider"),
   // Secrets aren't hydrated yet at construction; the BYOK default is set
   // post-hydration in initializeSettings.
-  cloudTranscriptionMode: readString("cloudTranscriptionMode", "openwhispr"),
+  cloudTranscriptionMode: "byok",
   cleanupCloudMode: readString("cleanupCloudMode", "openwhispr"),
   cleanupCloudBaseUrl: readString("cleanupCloudBaseUrl", API_ENDPOINTS.OPENAI_BASE),
   cortiEnvironment: readString("cortiEnvironment", "us"),
@@ -1851,7 +1764,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   assemblyAiStreaming: readBoolean("assemblyAiStreaming", true),
 
   autoGenerateNoteTitle: readBoolean("autoGenerateNoteTitle", true),
-  useCleanupModel: readBoolean("useCleanupModel", true),
+  useCleanupModel: false,
   useDictationAgent: readBoolean("useDictationAgent", true),
   cleanupModel: readString("cleanupModel", ""),
   cleanupProvider: readString("cleanupProvider", "openai"),
@@ -1903,7 +1816,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   dictationKey: readString("dictationKey", ""),
   activeDictationKey: null,
   meetingKey: readString("meetingKey", ""),
-  voiceAgentKey: readString("voiceAgentKey", ""),
+  voiceAgentKey: "",
   translationKey: readString("translationKey", ""),
   onboardingUseCases: readStringArray("onboardingUseCases", []),
   onboardingUseCaseNote: readString("onboardingUseCaseNote", ""),
@@ -1976,7 +1889,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   mcalPrimaryOnly: readBoolean("mcalPrimaryOnly", true),
   appleCalendarConnected: readBoolean("appleCalendarConnected", false),
   meetingProcessDetection: readBoolean("meetingProcessDetection", true),
-  speakerDiarizationEnabled: readBoolean("speakerDiarizationEnabled", true),
+  speakerDiarizationEnabled: readBoolean("speakerDiarizationEnabled", false),
   // Off by default: VAD on pause-heavy dictations can strip the speech and make
   // Whisper hallucinate the dictionary prompt as the transcript (#1454).
   dictationSileroEnabled: readBoolean("dictationSileroEnabled", false),
@@ -2015,11 +1928,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   noteFilesPath: readString("noteFilesPath", ""),
   isSignedIn: readBoolean("isSignedIn", false),
 
-  transcriptionMode: (() => {
-    const v = readString("transcriptionMode", "openwhispr");
-    if (v === "openwhispr" || v === "providers" || v === "local" || v === "self-hosted") return v;
-    return "openwhispr" as InferenceMode;
-  })(),
+  transcriptionMode: "self-hosted" as InferenceMode,
   remoteTranscriptionType: (() => {
     const v = readString("remoteTranscriptionType", "lan");
     return v === "openai-compatible" ? "openai-compatible" : ("lan" as SelfHostedType);
@@ -2042,11 +1951,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   cleanupRemoteUrl: readString("cleanupRemoteUrl", ""),
   keepLocalModelLoaded: readBoolean("keepLocalModelLoaded", false),
 
-  meetingTranscriptionMode: (() => {
-    const v = readString("meetingTranscriptionMode", "openwhispr");
-    if (v === "openwhispr" || v === "providers" || v === "local" || v === "self-hosted") return v;
-    return "openwhispr" as InferenceMode;
-  })(),
+  meetingTranscriptionMode: "self-hosted" as InferenceMode,
   meetingUseLocalWhisper: readBoolean("meetingUseLocalWhisper", false),
   meetingWhisperModel: readString("meetingWhisperModel", ""),
   meetingLocalTranscriptionProvider: readScopedLocalProvider("meetingLocalTranscriptionProvider"),
@@ -2062,11 +1967,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   })(),
   meetingRemoteTranscriptionUrl: readString("meetingRemoteTranscriptionUrl", ""),
 
-  uploadTranscriptionMode: (() => {
-    const v = readString("uploadTranscriptionMode", "openwhispr");
-    if (v === "openwhispr" || v === "providers" || v === "local" || v === "self-hosted") return v;
-    return "openwhispr" as InferenceMode;
-  })(),
+  uploadTranscriptionMode: "self-hosted" as InferenceMode,
   uploadUseLocalWhisper: readBoolean("uploadUseLocalWhisper", false),
   uploadWhisperModel: readString("uploadWhisperModel", ""),
   uploadLocalTranscriptionProvider: readScopedLocalProvider("uploadLocalTranscriptionProvider"),
@@ -3729,17 +3630,7 @@ export function getSettings(): SettingsState {
  * pointing at a deleted model fails at inference time with an error the user has
  * no way to act on. Cleared rather than repointed so the picker asks again.
  */
-export function clearMissingLocalModelSelections(isInstalled: (modelId: string) => boolean): void {
-  const settings = useSettingsStore.getState() as unknown as Record<string, unknown>;
-  const staleKeys: string[] = findStaleLocalModelKeys(
-    Object.values(INFERENCE_SCOPES),
-    settings,
-    isInstalled
-  );
-  for (const key of staleKeys) {
-    setStringSetting(key as keyof SettingsState, "");
-  }
-}
+export function clearMissingLocalModelSelections(_isInstalled: (modelId: string) => boolean): void {}
 
 // Another window may have made this move first; the first one tells the user.
 function moveSelection(storeKey: string, to: string): { alreadyMoved: boolean } {
@@ -4414,36 +4305,7 @@ export async function initializeSettings(): Promise<void> {
     // Prefer SQLite whenever it has entries (same policy as snippets). A stale
     // cache used to win when both sides were non-empty; ensureAgentNameInDictionary
     // then wrote that cache through setDictionary and wiped newer DB words (#1295).
-    let dictionarySyncSucceeded = !window.electronAPI?.getDictionary;
-    try {
-      if (window.electronAPI.getDictionary) {
-        const currentDictionary = useSettingsStore.getState().customDictionary;
-        const dbWords = await window.electronAPI.getDictionary();
-        const decision = chooseDictionaryStartupAction(dbWords, currentDictionary);
-        // A cache SQLite can't match may be another account's list, so main
-        // writes it only into a database that has never held a dictionary.
-        // SQLite is read again after the seed, as for snippets: whether this
-        // window's seed or another's landed, the cache takes what was stored.
-        if (decision.action === "push-local-to-db") {
-          await window.electronAPI.seedDictionary?.(decision.words);
-        }
-        if (decision.action !== "noop") {
-          const storedWords =
-            decision.action === "push-local-to-db"
-              ? await window.electronAPI.getDictionary()
-              : dbWords;
-          if (isBrowser) localStorage.setItem("customDictionary", JSON.stringify(storedWords));
-          useSettingsStore.setState({ customDictionary: storedWords });
-        }
-        dictionarySyncSucceeded = true;
-      }
-    } catch (err) {
-      logger.warn(
-        "Failed to sync dictionary on startup",
-        { error: (err as Error).message },
-        "settings"
-      );
-    }
+    let dictionarySyncSucceeded = true;
 
     // Sync snippets from SQLite <-> localStorage
     try {

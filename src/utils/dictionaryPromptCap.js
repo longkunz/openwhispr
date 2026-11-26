@@ -1,4 +1,4 @@
-import { isOpenRouterEndpoint } from "../helpers/transcriptionRoute.ts";
+﻿import { isOpenRouterEndpoint } from "../helpers/transcriptionRoute.ts";
 import { usesTranscriptionKeywords } from "./dictionaryKeywords.js";
 
 // Per-provider budgets for the custom-dictionary STT prompt on the direct-API

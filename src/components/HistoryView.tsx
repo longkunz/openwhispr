@@ -13,15 +13,9 @@ import historyEmptyLight from "../assets/empty-states/home-history-light.svg";
 import historyEmptyDark from "../assets/empty-states/home-history-dark.svg";
 import type { TranscriptionItem as TranscriptionItemType } from "../types/electron";
 import { formatDateGroup } from "../utils/dateFormatting";
-import { useUpcomingEvents } from "../hooks/useUpcomingEvents";
-import UpcomingMeetings from "./UpcomingMeetings";
 import { useSettingsStore } from "../stores/settingsStore";
 import { effectiveLocalHistoryEnabled } from "../stores/policyRules";
 import { usePolicyStore } from "../stores/policyStore";
-import { useToneStylePrompt } from "../hooks/useToneStylePrompt";
-import ToneStyleBanner from "./toneStyle/ToneStyleBanner";
-import ToneStyleSetupDialog from "./toneStyle/ToneStyleSetupDialog";
-import { turnOnDictationCleanup } from "./toneStyle/dictationCleanup";
 
 interface HistoryViewProps {
   history: TranscriptionItemType[];
@@ -34,7 +28,6 @@ interface HistoryViewProps {
   deleteTranscription: (id: number) => void;
   clearAllTranscriptions: () => void;
   onOpenSettings: (section?: string) => void;
-  onOpenIntegrations: () => void;
   onShowAudioInFolder: (id: number) => void;
   onRetryTranscription: (id: number, options?: { isRecover?: boolean }) => Promise<void>;
   showDiscarded: boolean;
@@ -53,7 +46,6 @@ export default function HistoryView({
   deleteTranscription,
   clearAllTranscriptions,
   onOpenSettings,
-  onOpenIntegrations,
   onShowAudioInFolder,
   onRetryTranscription,
   showDiscarded,
@@ -66,8 +58,6 @@ export default function HistoryView({
   const dataRetentionEnabled = usePolicyStore((policyState) =>
     effectiveLocalHistoryEnabled(policyState, personalDataRetentionEnabled)
   );
-  const { events, isLoading: eventsLoading, isConnected } = useUpcomingEvents();
-  const toneStylePrompt = useToneStylePrompt();
   const firstName = userName?.trim().split(/\s+/)[0];
   const hasHistory = history.length > 0;
 
@@ -124,57 +114,6 @@ export default function HistoryView({
           t(hasHistory ? "controlPanel.history.welcomeBack" : "controlPanel.history.welcome")
         )}
       </h2>
-      {toneStylePrompt.showBanner && (
-        <ToneStyleBanner
-          cleanupEnabled={useCleanupModel}
-          onStart={() => {
-            if (!useCleanupModel) turnOnDictationCleanup();
-            toneStylePrompt.setDialogOpen(true);
-          }}
-          onDismiss={toneStylePrompt.dismissBanner}
-        />
-      )}
-      <ToneStyleSetupDialog
-        open={toneStylePrompt.dialogOpen}
-        onOpenChange={toneStylePrompt.setDialogOpen}
-        onOpenSettings={onOpenSettings}
-      />
-      {/* The Tone & Style banner offers to turn cleanup on itself. */}
-      {!useCleanupModel && !aiCTADismissed && !toneStylePrompt.showBanner && (
-        <div className="mb-3 relative rounded-lg border border-primary/20 bg-primary/5 dark:bg-primary/10 p-3">
-          <button
-            onClick={() => {
-              localStorage.setItem("aiCTADismissed", "true");
-              setAiCTADismissed(true);
-            }}
-            aria-label={t("common.close")}
-            className="absolute top-2 end-2 p-1 rounded-sm text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-          >
-            <X size={14} />
-          </button>
-          <div className="flex items-start gap-3 pe-6">
-            <div className="shrink-0 w-8 h-8 rounded-md bg-primary/10 dark:bg-primary/20 flex items-center justify-center">
-              <Sparkles size={16} className="text-primary" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-foreground mb-0.5">
-                {t("controlPanel.aiCta.title")}
-              </p>
-              <p className="text-xs text-muted-foreground mb-2">
-                {t("controlPanel.aiCta.description")}
-              </p>
-              <Button
-                variant="default"
-                size="sm"
-                className="h-7 text-xs"
-                onClick={() => onOpenSettings("intelligence")}
-              >
-                {t("controlPanel.aiCta.enable")}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="flex gap-8">
         <div className="min-w-0 flex-1">
@@ -246,17 +185,6 @@ export default function HistoryView({
               ))}
             </div>
           )}
-        </div>
-
-        {/* With history, drop the day cards by one date row (pt-2 + text-sm line + pb-2.5) so
-            the first one lines up with the first transcription. */}
-        <div className={cn("hidden w-80 shrink-0 md:block", history.length > 0 && "pt-[2.375rem]")}>
-          <UpcomingMeetings
-            events={events}
-            isLoading={eventsLoading}
-            isConnected={isConnected}
-            onConnectCalendar={onOpenIntegrations}
-          />
         </div>
       </div>
     </div>

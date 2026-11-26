@@ -5,23 +5,19 @@ import { Button } from "./ui/button";
 import { PAGE_CONTENT_WIDTH_CLASS } from "./ui/pageWidth";
 import { cn } from "./lib/utils";
 import { BIDI_VALUE_TOKEN, BidiInterpolatedText } from "./ui/BidiInterpolatedText";
-import { Download, RefreshCw, Loader2, AlertTriangle, Zap } from "./icons";
-import UpgradePrompt from "./UpgradePrompt";
+import { AlertTriangle } from "./icons";
 import PostMigrationOnboarding from "./PostMigrationOnboarding";
-import { RequiredModelsBanner } from "./RequiredModelsBanner";
+import { SelfHostedSetupDialog } from "./SelfHostedSetupDialog";
 import { ConfirmDialog, AlertDialog } from "./ui/dialog";
 import { useDialogs } from "../hooks/useDialogs";
 import { useSignOut } from "../hooks/useSignOut";
 import { useHotkey } from "../hooks/useHotkey";
 import { useToast } from "./ui/useToast";
-import { useUpdater } from "../hooks/useUpdater";
-import { updatePolicyMessageKey } from "../utils/updatePolicyMessage";
 import { useSettings } from "../hooks/useSettings";
 import { recordingRecorderName } from "../utils/noteRecorder";
 import { useAuth } from "../hooks/useAuth";
 import { useJoinableWorkspaces } from "../hooks/useJoinableWorkspaces";
 import { useUsage } from "../hooks/useUsage";
-import { decideUpsell } from "../lib/upsell";
 import { useCollapsibleSidebar } from "../hooks/useCollapsibleSidebar";
 import {
   useTranscriptions,
@@ -38,11 +34,9 @@ import {
   useSettingsStore,
 } from "../stores/settingsStore";
 import {
-  startNewChat,
   subscribeChatAccountScope,
   subscribeChatPolicy,
 } from "../stores/chatTurnStore";
-import { useChatNeedsAttention } from "./chat/useChatNeedsAttention";
 import { usePolicyStore } from "../stores/policyStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { startWorkspaceScopeBridge } from "../stores/workspaceScopeBridge";
@@ -76,23 +70,16 @@ import ControlPanelSidebar from "./ControlPanelSidebar";
 import ControlPanelTopBar from "./ControlPanelTopBar";
 import { useControlPanelNavItems, type ControlPanelView } from "./controlPanelNav";
 import {
-  DEFAULT_INTEGRATIONS_SECTION,
-  type IntegrationsSection,
-} from "./integrations/integrationsSections";
-import {
   navigateAndLoadMeetingNote,
   navigateMeetingNotification,
 } from "./meetingNotificationNavigation";
 import MeetingRecordingMount from "./MeetingRecordingMount";
 import MeetingRecordingPill from "./notes/MeetingRecordingPill";
 import NewNoteMenu from "./notes/NewNoteMenu";
-import ProfileMenu from "./ProfileMenu";
 
 import { getCachedPlatform } from "../utils/platform";
 import { isAccessibilitySkipped } from "../utils/permissions";
-import { useGpuBannerAvailability } from "../hooks/useGpuBannerAvailability";
 import { startRecordingForNote, useCreateNote } from "../hooks/useCreateNote";
-import { useSignInCloudNudge } from "../hooks/useSignInCloudNudge";
 import {
   setActiveNoteId,
   setActiveFolderId,
@@ -118,7 +105,6 @@ import AssistantNoteUndoListener from "./notes/AssistantNoteUndoListener";
 import { assertValidCleanupOutput } from "../utils/cleanupOutput";
 import { providerErrorActions, providerErrorToastProps } from "../utils/describeProviderError";
 import SpaceSyncToastListener from "./notes/SpaceSyncToastListener";
-import SharedDictionaryArrivalToastListener from "./SharedDictionaryArrivalToastListener";
 import { syncService } from "../services/SyncService.js";
 import logger from "../utils/logger";
 import AcceptInvitationModal from "./AcceptInvitationModal";
@@ -129,24 +115,16 @@ import {
   consumePendingInvitationToken,
   clearPendingInvitationToken,
 } from "../utils/pendingInvitationToken";
-import type { SkillChatRequest, SkillChatStart, SkillOpenRequest } from "../types/skills";
-import type { SourceNote } from "./chat/useSourceNote";
 import type { MeetingStartSource } from "../types/electron";
 
 const platform = getCachedPlatform();
 
 const SIDEBAR_WIDTH_PX = 192;
-// open-settings-section names an Integrations section as "integrations.<section>".
-const INTEGRATIONS_TARGET_PREFIX = "integrations.";
 
 const SettingsModal = React.lazy(() => import("./SettingsModal"));
-const ReferralModal = React.lazy(() => import("./ReferralModal"));
 const PersonalNotesView = React.lazy(() => import("./notes/PersonalNotesView"));
 const InsightsView = React.lazy(() => import("./InsightsView"));
-const DictionaryView = React.lazy(() => import("./DictionaryView"));
 const UploadAudioView = React.lazy(() => import("./notes/UploadAudioView"));
-const IntegrationsView = React.lazy(() => import("./IntegrationsView"));
-const ChatView = React.lazy(() => import("./chat/ChatView"));
 const CommandSearch = React.lazy(() => import("./CommandSearch"));
 
 interface ControlPanelProps {
@@ -160,12 +138,9 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   const history = useTranscriptions();
   const [isLoading, setIsLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(!!initialSettingsSection);
-  const [showUpgradePrompt, setShowUpgradePrompt] = useState(false);
   const [showPostMigration, setShowPostMigration] = useState(false);
   const [postMigrationChecked, setPostMigrationChecked] = useState(platform !== "darwin");
   useModalGate("postMigrationPending", !postMigrationChecked);
-  const [limitData, setLimitData] = useState<{ wordsUsed: number; limit: number } | null>(null);
-  const hasShownUpgradePrompt = useRef(false);
   const [settingsSection, setSettingsSection] = useState<string | undefined>(
     initialSettingsSection
   );
@@ -175,13 +150,10 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   const [aiCTADismissed, setAiCTADismissed] = useState(
     () => localStorage.getItem("aiCTADismissed") === "true"
   );
-  const [showReferrals, setShowReferrals] = useState(false);
   const [invitationToken, setInvitationToken] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const showDiscarded = useShowDiscarded();
   const [activeView, setActiveView] = useState<ControlPanelView>("home");
-  // The chat keeps its turns running behind other views; one that waits on the user marks Chat.
-  const chatNeedsAttention = useChatNeedsAttention();
   useModalGate("invitation", invitationToken !== null);
   // Accepting an invitation or joining a workspace routes to Notes, which may open its structure
   // intro. Notes is lazy, so it can mount late; this holds the gate until it has taken over.
@@ -190,9 +162,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   useModalGate("notesHandOff", notesHandOff && activeView === "personal-notes");
   const [invitationNotesEntry, setInvitationNotesEntry] = useInvitationNotesEntry(
     activeView === "personal-notes"
-  );
-  const [integrationsSection, setIntegrationsSection] = useState<IntegrationsSection>(
-    DEFAULT_INTEGRATIONS_SECTION
   );
   const navItems = useControlPanelNavItems();
   const {
@@ -218,9 +187,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     trigger?: string;
     noteSessionId?: string;
   } | null>(null);
-  // Try now and Create with assistant open a chat; Open skill on a chat's card opens the skill.
-  const [skillChatRequest, setSkillChatRequest] = useState<SkillChatRequest | null>(null);
-  const [openSkillRequest, setOpenSkillRequest] = useState<SkillOpenRequest | null>(null);
   const [gpuBannerDismissed, setGpuBannerDismissed] = useState(
     () => localStorage.getItem("gpuBannerDismissedUnified") === "true"
   );
@@ -242,27 +208,11 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   } = useJoinableWorkspaces(user?.id ?? null, isSignedIn && !invitationToken);
   useModalGate("joinYourTeamPending", joinablePending);
   const usage = useUsage();
-  const upsell = decideUpsell({
-    authLoaded,
-    isSignedIn,
-    hasPaidAccess: usage?.hasPaidAccess ?? null,
-    isPastDue: usage?.isPastDue ?? false,
-  });
-
-  const {
-    status: updateStatus,
-    downloadProgress,
-    isDownloading,
-    isInstalling,
-    downloadUpdate,
-    installUpdate,
-  } = useUpdater();
 
   const openTranscriptionSettings = useCallback(() => {
     setSettingsSection("transcription");
     setShowSettings(true);
   }, []);
-  useSignInCloudNudge(isSignedIn, openTranscriptionSettings);
   const workspacesLoaded = useWorkspaceStore((state) => state.loaded);
   const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId);
   const [audioTestLink, setAudioTestLink] = useState<EnterpriseAudioTestLink | null>(null);
@@ -308,11 +258,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     await createNote();
     setActiveView("personal-notes");
   }, [createNote]);
-  const showDictionary = useCallback(() => {
-    setShowSettings(false);
-    setSettingsSection(undefined);
-    setActiveView("dictionary");
-  }, []);
   const policyActionsAllowed = usePolicyStore((state) => isPolicyActionAllowed(state));
   useEffect(() => {
     if (!isControlPanelViewAllowed(activeView, agentAllowedByPolicy, policyActionsAllowed)) {
@@ -325,26 +270,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   // Policy-effective, because the settings pane the GPU banner links to renders
   // the clamped mode — see eligibleGpuOffers.
   const policySnapshot = usePolicySnapshot();
-  const gpuBannerSettings = useSettingsStore(
-    useShallow((settings) => {
-      const effective = selectPolicyEffectiveSettings(settings, policySnapshot);
-      return {
-        useLocalWhisper: effective.useLocalWhisper,
-        localTranscriptionProvider: effective.localTranscriptionProvider,
-        useCleanupModel: effective.useCleanupModel,
-        cleanupMode: effective.cleanupMode,
-        useDictationAgent: effective.useDictationAgent,
-        dictationAgentMode: effective.dictationAgentMode,
-      };
-    })
-  );
-  const gpuAccelAvailable = useGpuBannerAvailability({
-    settings: gpuBannerSettings,
-    agentAllowedByPolicy,
-    dismissed: gpuBannerDismissed,
-    settingsOpen: showSettings,
-    platform,
-  });
 
   const {
     confirmDialog,
@@ -412,36 +337,13 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   }, []);
 
   useEffect(() => {
-    if (updateStatus.updateDownloaded && !isDownloading) {
-      if (!updateReadyToastShown.current) {
-        updateReadyToastShown.current = true;
-        toast({
-          title: t("controlPanel.update.readyTitle"),
-          description: t("controlPanel.update.readyDescription"),
-          variant: "success",
-        });
-      }
-    } else {
-      updateReadyToastShown.current = false;
-    }
-  }, [updateStatus.updateDownloaded, isDownloading, toast, t]);
-
-  useEffect(() => {
-    const dispose = window.electronAPI?.onLimitReached?.(
-      (data: { wordsUsed: number; limit: number }) => {
-        if (!hasShownUpgradePrompt.current) {
-          hasShownUpgradePrompt.current = true;
-          setLimitData(data);
-          setShowUpgradePrompt(true);
-        } else {
-          toast({
-            title: t("controlPanel.limit.weeklyTitle"),
-            description: t("controlPanel.limit.weeklyDescription"),
-            duration: 5000,
-          });
-        }
-      }
-    );
+    const dispose = window.electronAPI?.onLimitReached?.(() => {
+      toast({
+        title: t("controlPanel.limit.weeklyTitle"),
+        description: t("controlPanel.limit.weeklyDescription"),
+        duration: 5000,
+      });
+    });
 
     return () => {
       dispose?.();
@@ -609,15 +511,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     // start); a bare request (app-menu Cmd+,) keeps an open modal where it is.
     const drain = async (showAnyway: boolean) => {
       const section = await window.electronAPI?.getPendingSettingsSection?.();
-      // Integrations is a view, not a Settings section.
-      if (section?.startsWith(INTEGRATIONS_TARGET_PREFIX)) {
-        setIntegrationsSection(
-          section.slice(INTEGRATIONS_TARGET_PREFIX.length) as IntegrationsSection
-        );
-        setActiveView("integrations");
-        setShowSettings(false);
-        return;
-      }
       if (section) {
         setSettingsSection(section);
         setSettingsRequest((count) => count + 1);
@@ -658,17 +551,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     []
   );
 
-  const startSkillChat = useCallback((start: SkillChatStart) => {
-    setSkillChatRequest({ ...start, id: Date.now() });
-    setActiveView("chat");
-  }, []);
-  const handleSkillChatRequestHandled = useCallback(() => setSkillChatRequest(null), []);
-  const openSkill = useCallback((name: string) => {
-    setIntegrationsSection("skills");
-    setOpenSkillRequest({ id: Date.now(), name });
-    setActiveView("integrations");
-  }, []);
-  const handleOpenSkillRequestHandled = useCallback(() => setOpenSkillRequest(null), []);
   // Settings sits over the notes view, so a teamspace opens by closing it and landing the tree there.
   const openTeamspace = useCallback((spaceId: number) => {
     setShowSettings(false);
@@ -686,11 +568,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     },
     []
   );
-  const openChatSourceNote = useCallback(
-    (note: SourceNote) => openNoteInNotes(note.id, note.folderId, note.spaceId),
-    [openNoteInNotes]
-  );
-
   // The side-panel layout is shared by meeting mode and by a note opened in a
   // narrow window, so leaving it means different things in each case.
   const handleExitSidePanel = useCallback(() => {
@@ -1062,82 +939,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     loadTranscriptions(!showDiscarded);
   }, [loadTranscriptions, showDiscarded]);
 
-  const handleUpdateClick = async () => {
-    if (updateStatus.updateDownloaded) {
-      showConfirmDialog({
-        title: t("controlPanel.update.installTitle"),
-        description: t("controlPanel.update.installDescription"),
-        onConfirm: async () => {
-          try {
-            await installUpdate();
-          } catch (error) {
-            const policyMessage = updatePolicyMessageKey(error);
-            if (policyMessage) {
-              toast({ title: t(policyMessage) });
-              return;
-            }
-            toast({
-              title: t("controlPanel.update.couldNotInstallTitle"),
-              description: t("controlPanel.update.couldNotInstallDescription"),
-              variant: "destructive",
-            });
-          }
-        },
-      });
-    } else if (updateStatus.updateAvailable && !isDownloading) {
-      try {
-        await downloadUpdate();
-      } catch (error) {
-        const policyMessage = updatePolicyMessageKey(error);
-        if (policyMessage) {
-          toast({ title: t(policyMessage) });
-          return;
-        }
-        toast({
-          title: t("controlPanel.update.couldNotDownloadTitle"),
-          description: t("controlPanel.update.couldNotDownloadDescription"),
-          variant: "destructive",
-        });
-      }
-    }
-  };
-
-  const getUpdateButtonContent = () => {
-    if (isInstalling) {
-      return (
-        <>
-          <Loader2 size={14} className="animate-spin" />
-          <span>{t("controlPanel.update.installing")}</span>
-        </>
-      );
-    }
-    if (isDownloading) {
-      return (
-        <>
-          <Loader2 size={14} className="animate-spin" />
-          <span>{Math.round(downloadProgress)}%</span>
-        </>
-      );
-    }
-    if (updateStatus.updateDownloaded) {
-      return (
-        <>
-          <RefreshCw size={14} />
-          <span>{t("controlPanel.update.installButton")}</span>
-        </>
-      );
-    }
-    if (updateStatus.updateAvailable) {
-      return (
-        <>
-          <Download size={14} />
-          <span>{t("controlPanel.update.availableButton")}</span>
-        </>
-      );
-    }
-    return null;
-  };
-
   return (
     <div className="h-screen bg-surface-window flex flex-col">
       <MeetingRecordingMount />
@@ -1169,13 +970,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
         onOk={() => {}}
       />
 
-      <UpgradePrompt
-        open={showUpgradePrompt}
-        onOpenChange={setShowUpgradePrompt}
-        wordsUsed={limitData?.wordsUsed}
-        limit={limitData?.limit}
-      />
-
       <PostMigrationOnboarding
         open={showPostMigration}
         onOpenChange={setShowPostMigration}
@@ -1195,12 +989,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
             initialSection={settingsSection}
             onOpenTeamspace={openTeamspace}
           />
-        </Suspense>
-      )}
-
-      {showReferrals && (
-        <Suspense fallback={null}>
-          <ReferralModal open={showReferrals} onOpenChange={setShowReferrals} />
         </Suspense>
       )}
 
@@ -1242,6 +1030,8 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
         />
       </Suspense>
 
+      <SelfHostedSetupDialog />
+
       <div className="flex flex-1 overflow-hidden relative">
         <div
           className="shrink-0 transition-[width] duration-300 ease-out"
@@ -1262,40 +1052,13 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
         >
           <ControlPanelSidebar
             activeView={activeView}
-            chatNeedsAttention={activeView !== "chat" && chatNeedsAttention}
             onViewChange={setActiveView}
             onOpenSettings={() => {
               setSettingsSection(undefined);
               setShowSettings(true);
             }}
-            onOpenReferrals={() => setShowReferrals(true)}
-            onUpgrade={() => {
-              setSettingsSection("plansBilling");
-              setShowSettings(true);
-            }}
-            isOverLimit={usage?.isOverLimit ?? false}
-            isSignedIn={isSignedIn}
-            upsell={upsell}
             // The side-panel layout (a meeting, or a narrow window with a note open) has no room for it.
             workspaceIntroAllowed={!showSettings && !isSidePanelLayout}
-            updateAction={
-              updateStatus.updateMode !== "it_managed" &&
-              !updateStatus.isDevelopment &&
-              (updateStatus.updateAvailable ||
-                updateStatus.updateDownloaded ||
-                isDownloading ||
-                isInstalling) ? (
-                <Button
-                  variant={updateStatus.updateDownloaded ? "default" : "outline"}
-                  size="sm"
-                  onClick={handleUpdateClick}
-                  disabled={isInstalling || isDownloading}
-                  className="gap-1.5 text-xs w-full h-7"
-                >
-                  {getUpdateButtonContent()}
-                </Button>
-              ) : undefined
-            }
           />
         </div>
         <main className="flex-1 flex flex-col overflow-hidden p-2">
@@ -1311,59 +1074,11 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
               onExitSidePanel={handleExitSidePanel}
               actions={
                 <div className="flex items-center gap-2">
-                  <NewNoteMenu
-                    onNewNote={handleNewNote}
-                    onNewChat={
-                      agentAllowedByPolicy
-                        ? () => {
-                            startNewChat();
-                            setActiveView("chat");
-                          }
-                        : undefined
-                    }
-                  />
-                  <ProfileMenu
-                    onOpenSettings={(section) => {
-                      setSettingsSection(section);
-                      setShowSettings(true);
-                    }}
-                    onOpenReferrals={() => setShowReferrals(true)}
-                    onSignOut={requestSignOut}
-                  />
+                  <NewNoteMenu onNewNote={handleNewNote} />
                 </div>
               }
             />
             <div className="scrollbar-hidden flex-1 overflow-y-auto">
-              {updateRequiredByOrg && (
-                <div className={cn(PAGE_CONTENT_WIDTH_CLASS, "px-6 mb-3")}>
-                  <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/50 p-3">
-                    <div className="flex items-start gap-3">
-                      <div className="shrink-0 w-8 h-8 rounded-md bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center">
-                        <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-amber-900 dark:text-amber-200 mb-0.5">
-                          {t("controlPanel.updateRequiredByOrg.title")}
-                        </p>
-                        <p className="text-xs text-amber-700 dark:text-amber-300/80">
-                          <BidiInterpolatedText
-                            text={t(
-                              updateStatus.updateMode === "it_managed"
-                                ? "controlPanel.updateRequiredByOrg.contactIT"
-                                : "controlPanel.updateRequiredByOrg.description",
-                              {
-                                version: BIDI_VALUE_TOKEN,
-                              }
-                            )}
-                            value={policyMinAppVersion}
-                          />
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-              <RequiredModelsBanner />
               {usage?.isPastDue && activeView === "home" && (
                 <div className={cn(PAGE_CONTENT_WIDTH_CLASS, "px-6 mb-3")}>
                   <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/50 p-3">
@@ -1396,55 +1111,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                   </div>
                 </div>
               )}
-              {(gpuAccelAvailable.transcription || gpuAccelAvailable.intelligence) &&
-                activeView === "home" &&
-                !gpuBannerDismissed && (
-                  <div className={cn(PAGE_CONTENT_WIDTH_CLASS, "px-6 mb-3")}>
-                    <div className="rounded-lg border border-primary/20 dark:border-primary/15 bg-primary/5 p-3">
-                      <div className="flex items-start gap-3">
-                        <div className="shrink-0 w-8 h-8 rounded-md bg-primary/10 dark:bg-primary/15 flex items-center justify-center">
-                          <Zap size={16} className="text-primary" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-foreground mb-0.5">
-                            {t("controlPanel.gpu.bannerTitle")}
-                          </p>
-                          <p className="text-xs text-muted-foreground mb-2">
-                            {t("controlPanel.gpu.bannerDescription")}
-                          </p>
-                          <div className="flex items-center gap-3">
-                            <Button
-                              variant="default"
-                              size="sm"
-                              className="h-7 text-xs"
-                              onClick={() => {
-                                setSettingsSection(
-                                  gpuAccelAvailable.transcription
-                                    ? "transcription"
-                                    : gpuAccelAvailable.intelligence === "dictationAgent"
-                                      ? "dictationAgent"
-                                      : "intelligence"
-                                );
-                                setShowSettings(true);
-                              }}
-                            >
-                              {t("controlPanel.gpu.enableButton")}
-                            </Button>
-                            <button
-                              onClick={() => {
-                                setGpuBannerDismissed(true);
-                                localStorage.setItem("gpuBannerDismissedUnified", "true");
-                              }}
-                              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                              {t("controlPanel.gpu.dismissButton")}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
               {activeView === "home" && (
                 <HistoryView
                   history={history}
@@ -1465,29 +1131,15 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                     setSettingsSection(section);
                     setShowSettings(true);
                   }}
-                  onOpenIntegrations={() => {
-                    setIntegrationsSection("calendars");
-                    setActiveView("integrations");
-                  }}
                 />
               )}
               {activeView === "insights" && (
                 <Suspense fallback={null}>
                   <InsightsView
                     onSignIn={() => {
-                      setSettingsSection("account");
+                      setSettingsSection("general");
                       setShowSettings(true);
                     }}
-                  />
-                </Suspense>
-              )}
-              {activeView === "chat" && agentAllowedByPolicy && (
-                <Suspense fallback={null}>
-                  <ChatView
-                    skillRequest={skillChatRequest}
-                    onSkillRequestHandled={handleSkillChatRequestHandled}
-                    onOpenSkill={openSkill}
-                    onOpenNote={openChatSourceNote}
                   />
                 </Suspense>
               )}
@@ -1508,16 +1160,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                   />
                 </Suspense>
               )}
-              {activeView === "dictionary" && (
-                <Suspense fallback={null}>
-                  <DictionaryView
-                    onUpgrade={() => {
-                      setSettingsSection("plansBilling");
-                      setShowSettings(true);
-                    }}
-                  />
-                </Suspense>
-              )}
               {activeView === "upload" && policyActionsAllowed && (
                 <Suspense fallback={null}>
                   <UploadAudioView
@@ -1533,22 +1175,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                   />
                 </Suspense>
               )}
-              {activeView === "integrations" && (
-                <Suspense fallback={null}>
-                  <IntegrationsView
-                    isPaid={usage?.hasPaidAccessOptimistic ?? false}
-                    onUpgrade={() => {
-                      setSettingsSection("plansBilling");
-                      setShowSettings(true);
-                    }}
-                    section={integrationsSection}
-                    onSectionChange={setIntegrationsSection}
-                    onStartSkillChat={agentAllowedByPolicy ? startSkillChat : undefined}
-                    openSkillRequest={openSkillRequest}
-                    onOpenSkillRequestHandled={handleOpenSkillRequestHandled}
-                  />
-                </Suspense>
-              )}
             </div>
           </div>
         </main>
@@ -1556,7 +1182,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
       <BackgroundActionToastListener />
       <AssistantNoteUndoListener />
       <SpaceSyncToastListener />
-      <SharedDictionaryArrivalToastListener onViewWords={showDictionary} />
     </div>
   );
 }

@@ -40,6 +40,8 @@ export function RecordingWave({ className }: { className?: string }) {
 interface NoteRecordControlProps {
   isRecording: boolean;
   isProcessing: boolean;
+  startedAt?: number | null;
+  readLevel?: () => number;
   disabled?: boolean;
   disabledReason?: string;
   onStart: () => void;
@@ -50,6 +52,8 @@ interface NoteRecordControlProps {
 export default function NoteRecordControl({
   isRecording,
   isProcessing,
+  startedAt: startedAtProp,
+  readLevel: readLevelProp,
   disabled = false,
   disabledReason,
   onStart,
@@ -61,7 +65,8 @@ export default function NoteRecordControl({
   // Elapsed time comes from the session's start timestamp rather than a tick
   // count: this control remounts whenever the user switches notes, and counted
   // ticks would restart at zero (and drift while the window is throttled).
-  const startedAt = useMeetingRecordingStore((s) => s.recordingStartedAt);
+  const storeStartedAt = useMeetingRecordingStore((s) => s.recordingStartedAt);
+  const startedAt = startedAtProp ?? storeStartedAt;
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -103,7 +108,11 @@ export default function NoteRecordControl({
           >
             <Square size={8} fill="currentColor" />
           </span>
-          <LiveWaveform readLevel={readMeetingMicLevel} bars={10} className="h-3.5 flex-1" />
+          <LiveWaveform
+            readLevel={readLevelProp ?? readMeetingMicLevel}
+            bars={10}
+            className="h-3.5 flex-1"
+          />
           <span className="shrink-0 text-xs font-medium tabular-nums text-foreground/85">
             {formatMmSs(elapsed)}
           </span>

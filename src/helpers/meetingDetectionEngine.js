@@ -450,7 +450,10 @@ class MeetingDetectionEngine {
   // activeMeeting only means the event's scheduled window is open — actual meeting
   // recordings are tracked by _meetingModeActive.
   _findCalendarEvent() {
-    const calendarState = this.reminderScheduler.getActiveMeetingState();
+    const calendarState = this.reminderScheduler?.getActiveMeetingState() ?? {
+      activeMeeting: null,
+      upcomingEvents: [],
+    };
     if (calendarState.activeMeeting) return calendarState.activeMeeting;
 
     const now = Date.now();

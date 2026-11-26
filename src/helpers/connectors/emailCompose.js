@@ -1,4 +1,4 @@
-// ESM like meetingJoinUrl.js: shared with the renderer (the email_draft tool
+﻿// ESM like meetingJoinUrl.js: shared with the renderer (the email_draft tool
 // checks addresses) and loaded by the main-process email connector through
 // require(esm).
 

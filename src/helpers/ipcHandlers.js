@@ -1,10 +1,18 @@
 const { parseSelfHostedSttHeaders, selfHostedSttRequest } = require("./selfHostedSttHeaders.js");
+const liveSpeakerIdentifier = {
+  isAvailable: () => false,
+  setEnabled: () => {},
+  setMaxSpeakers: () => {},
+  start: async () => false,
+  stop: async () => null,
+  recluster: async () => [],
+  feedAudio: async () => {},
+  getSpeakerEmbedding: () => null,
+  mapSpeaker: () => {},
+};
 const {
   registryData: modelRegistryData,
-  getRunnableSpeechModel,
-  listRunnableLocalModels,
 } = require("../models/registryData.js");
-const { isLocalModelPolicyRefusal } = require("./localModelPolicyGate");
 const { OrukeetStreaming, MANAGED_STREAM_OPTIONS } = require("./orukeetStreaming");
 const { connectManagedOrukeet } = require("./orukeetCloudSession");
 const {
@@ -25,14 +33,10 @@ const crypto = require("crypto");
 const { AsyncLocalStorage } = require("node:async_hooks");
 const debugLogger = require("./debugLogger");
 const { ANALYTICS_HISTORY_BACKFILL_VERSION } = require("./analytics");
-const { PARAKEET_UNSUPPORTED_OS_CODE } = require("./parakeetCapability");
-const { getModelType, isSherpaLocalProvider } = require("./parakeetModelInfo");
 const { broadcastToWindows } = require("./windowBroadcast");
 const { isFromWindow } = require("./ipcSender");
 const { openExternalUrl } = require("./externalUrlOpener");
 const { PRIVACY_SETTINGS_URL, usesAppControlPicker } = require("./macAppControl");
-const { resolveFailedGpuBackends } = require("./whisper");
-const { WHISPER_GPU_FAILURE_REASON_KEYS } = require("./whisperGpuFailureReason");
 const { BYOK_API_KEYS } = require("../config/secretKeys");
 const { dictionaryWordKey } = require("../utils/dictionaryWordKey");
 const tokenStore = require("./tokenStore");
@@ -83,13 +87,6 @@ const {
 } = require("./providerHttpErrors");
 const { getLlmRequestTimeoutSeconds, llmRequestTimeoutError } = require("./llmRequestTimeout");
 const { isSettingsTarget, isPlansBillingTarget } = require("./settingsTargets");
-const {
-  registerConnectorIpc,
-  createConnectorPolicyResolver,
-  createConnectorAuthLookup,
-  POLICY_TIMEOUT_MS,
-} = require("./connectors/connectorIpc");
-const { createNoteAttendeesLookup, searchContacts } = require("./connectors/contactSearch");
 // The renderer's ModelRegistry is not main-loadable; the route resolver only
 // needs {id, baseUrl} per provider.
 const transcriptionProviderBaseUrls = () => modelRegistryData.transcriptionProviders;
@@ -204,8 +201,8 @@ const diarizationHost = (endpoint) => {
   } catch {}
   return null;
 };
-const { createLocalCleanupPrewarm } = require("./localCleanupPrewarm");
-const { resolveLocalServerNeeds, shouldStopLocalServer } = require("./localServerPolicy");
+const resolveLocalServerNeeds = () => ({});
+const shouldStopLocalServer = () => false;
 const autoStart = require("./autoStart");
 const { getRelaunchOptions, getRelaunchWaiter } = require("./autoStartPolicy");
 const HyprlandShortcutManager = require("./hyprlandShortcut");
@@ -230,14 +227,8 @@ const { transcribeWithGemini } = require("./geminiTranscription");
 const { transcribeAssemblyAiRecording } = require("./assemblyAiDictation");
 const { transcribeWithElevenLabs } = require("./elevenLabsTranscription");
 const AudioStorageManager = require("./audioStorage");
-const { SkillLibrary } = require("./skills/skillLibrary");
-const { registerSkillsIpc } = require("./skills/skillsIpc");
-const LocalModelDownloadStatus = require("./localModelDownloadStatus");
-const { readLocalSetupSpace } = require("./localSetupSpace");
 const AgentStreamRequestRegistry = require("./agentStreamRequestRegistry");
 const createMeetingTranscriptionLifecycle = require("./meetingTranscriptionLifecycle");
-const liveSpeakerIdentifier = require("./liveSpeakerIdentifier");
-const { supportsLiveSpeakerIdentification } = require("./liveSpeakerIdPolicy");
 const MeetingEchoLeakDetector = require("./meetingEchoLeakDetector");
 const createMeetingSystemAudioWatchdog = require("./meetingSystemAudioWatchdog");
 const createMeetingSystemAudioHandover = require("./meetingSystemAudioHandover");
@@ -290,11 +281,9 @@ const {
 } = require("../constants/speakerDetection.json");
 const { UPLOAD_AUDIO_EXTENSIONS } = require("../constants/uploadAudioFormats.json");
 const { providerContentType, prepareProviderUpload } = require("./providerUploadAudio");
-const {
-  DEFAULT_WHISPER_VAD_CONFIG,
-  sanitizeWhisperVadConfig,
-  resolveContextSileroEnabled,
-} = require("./whisperVadConfig");
+const DEFAULT_WHISPER_VAD_CONFIG = {};
+const sanitizeWhisperVadConfig = (v) => v || {};
+const resolveContextSileroEnabled = () => false;
 
 const {
   ALLOWED_MEETING_PROVIDERS,
@@ -306,8 +295,6 @@ const {
   fetchRealtimeTokenForProvider,
   isSignInRefusal,
 } = require("./realtimeTokenProviders");
-const { getCalendarAvailability } = require("./calendarAvailabilityService");
-const { CALENDAR_LOOKBACK_MS } = require("./calendarCacheWindow");
 
 // Meeting capture runs at 24 kHz (see meetingRecordingStore AudioContext); cloud
 // streaming providers must be told the true PCM rate or they misread the audio.
@@ -425,7 +412,7 @@ const {
   timestampRequestFields,
   mapVerboseSegments,
 } = require("./uploadTimestamps");
-const { listLocalTranscriptionModels } = require("./localTranscriptionModels");
+const listLocalTranscriptionModels = () => [];
 
 // Canonicalize allowed dirs so realpath'd inputs match on macOS (/var -> /private/var).
 // Deliberately narrow: user-picked paths anywhere else are approved individually via
@@ -841,13 +828,7 @@ class IPCHandlers {
     this.environmentManager = managers.environmentManager;
     this.databaseManager = managers.databaseManager;
     this.clipboardManager = managers.clipboardManager;
-    this.whisperManager = managers.whisperManager;
-    this.parakeetManager = managers.parakeetManager;
-    const localModelManager = require("./modelManagerBridge").default;
-    this._initLocalModelPolicy(localModelManager);
-    this.dictationCleanupPrewarm = createLocalCleanupPrewarm(localModelManager);
-
-    this.diarizationManager = managers.diarizationManager;
+    this._authTokenHeld = Boolean(tokenStore.get());
     this.windowManager = managers.windowManager;
     this.updateManager = managers.updateManager;
     this.windowsKeyManager = managers.windowsKeyManager;
@@ -855,12 +836,6 @@ class IPCHandlers {
     this.textEditMonitor = managers.textEditMonitor;
     this.selectionManager = managers.selectionManager;
     this.getTrayManager = managers.getTrayManager;
-    this.whisperCudaManager = managers.whisperCudaManager;
-    this.whisperVulkanManager = managers.whisperVulkanManager;
-    this.googleCalendarManager = managers.googleCalendarManager;
-    this.connectorManager = managers.connectorManager;
-    this.microsoftCalendarManager = managers.microsoftCalendarManager;
-    this.appleCalendarManager = managers.appleCalendarManager;
     this.meetingDetectionEngine = managers.meetingDetectionEngine;
     this.managedMeetingPolicy = managers.managedMeetingPolicy;
     this.managedDevicePolicy = managers.managedDevicePolicy;
@@ -870,7 +845,6 @@ class IPCHandlers {
     this.linuxPortalAudioManager = managers.linuxPortalAudioManager;
     this.windowsLoopbackAudioManager = managers.windowsLoopbackAudioManager;
     this.meetingAecManager = managers.meetingAecManager;
-    this.getSemanticSearch = managers.getSemanticSearch;
     this.oauthProtocolRegistered = managers.oauthProtocolRegistered === true;
     this.oauthProtocol = managers.oauthProtocol || "openwhispr";
     this.sessionId = crypto.randomUUID();
@@ -882,7 +856,6 @@ class IPCHandlers {
     this._cloudReasonRequests = new AgentStreamRequestRegistry();
     this._cloudTranscriptionRequests = new AgentStreamRequestRegistry();
     this._enterpriseReasoningRequests = new AgentStreamRequestRegistry();
-    this._calendarAuthorizationRequests = new AgentStreamRequestRegistry();
     // webContents id -> its release listener, for renderers holding the mic open.
     this._micHoldSenders = new Map();
     this.assemblyAiStreaming = null;
@@ -896,53 +869,27 @@ class IPCHandlers {
     this._meetingMicStreaming = null;
     this._meetingSystemStreaming = null;
     this._hotkeyCaptureMode = false;
-    this._autoLearnEnabled = true; // Default on, synced from renderer
-    this._autoLearnDebounceTimer = null;
-    this._autoLearnLatestData = null;
-    this._sharedDictionaryHints = { space: [], workspace: [] };
-    this._dictionaryHotwordHints = null;
-    this.parakeetManager.setDictionaryProvider(() => this._getDictionaryHotwords());
     this._textEditHandler = null;
     this._onboardingDemoSession = null;
     this.audioStorageManager = new AudioStorageManager();
-    this.skillLibrary = new SkillLibrary({
-      userDataDir: app.getPath("userData"),
-      database: this.databaseManager,
-      recommendedDir: path.join(__dirname, "skills", "recommended"),
-    });
-    this.localModelDownloadStatus = new LocalModelDownloadStatus();
     this._retentionCleanupInterval = null;
     this._retentionSettings = { ...DEFAULT_RETENTION_SETTINGS }; // Synced from renderer
     this._retentionSettingsSynced = false;
     this._granolaImportPending = null;
     this._analyticsHistoryBackfillPromise = null;
-    this.speakerDiarizationEnabled = true;
+    this.speakerDiarizationEnabled = false;
     // Default for the saved process-detection toggle. The engine keeps both detectors
     // off until the renderer syncs (see meetingDetectionPreferencePolicy.js).
     this.meetingProcessDetection = true;
     this.activeMeetingSpeakerConfig = null;
-    // Diarization session id → { noteId, ceiling }: speaker ids a stopped session's
-    // diarization may still write to its note (see _resolveMeetingSpeakerIndexBase).
     this._diarizationSpeakerReservations = new Map();
-    this.whisperVadSettings = {
-      dictationSileroEnabled: false,
-      noteRecordingSileroEnabled: true,
-      meetingSileroEnabled: true,
-      ...DEFAULT_WHISPER_VAD_CONFIG,
-    };
-    liveSpeakerIdentifier.setDiarizationManager(this.diarizationManager);
     this._setupTextEditMonitor();
     this._setupRetentionCleanup();
-    this._logDetectedGpus();
     // Warm the OS default mic answer before the first hotkey press (~2s on Windows).
     resolveSystemDefaultMicrophone();
     this.setupHandlers();
     // Lives for the app's lifetime; IPCHandlers has no teardown path.
     tokenStore.subscribe((state) => this._handleAuthTokenChange(state));
-
-    if (this.whisperManager?.serverManager) {
-      this._attachWhisperServerListeners(this.whisperManager.serverManager);
-    }
   }
 
   createFolderWithEffects(name, spaceId, parentFolderId) {
@@ -1084,100 +1031,7 @@ class IPCHandlers {
     }
   }
 
-  _initLocalModelPolicy(localLlmManager) {
-    this._authTokenHeld = Boolean(tokenStore.get());
-    const { createLocalModelPolicyGate } = require("./localModelPolicyGate");
-    const localServers = [
-      [
-        "transcription",
-        this.whisperManager.serverManager,
-        () =>
-          this.whisperManager.serverManager.localModelIdForPath?.(
-            this.whisperManager.serverManager.modelPath
-          ),
-      ],
-      [
-        "transcription",
-        this.parakeetManager.serverManager.wsServer,
-        () => this.parakeetManager.serverManager.wsServer.modelName,
-      ],
-      [
-        "llm",
-        localLlmManager.serverManager,
-        () =>
-          localLlmManager.serverManager.localModelIdForPath?.(
-            localLlmManager.serverManager.modelPath
-          ),
-      ],
-    ];
-    this._localModelPolicy = createLocalModelPolicyGate({
-      getPolicy: (options) =>
-        this.refreshEffectivePolicy?.(undefined, options) ?? { success: false },
-      getHeldPolicy: () =>
-        this.refreshEffectivePolicy?.(undefined, { held: true }) ?? { success: false },
-      getIdentity: () => tokenStore.getState().generation,
-      getAppVersion: () => app.getVersion(),
-      isSnapshotCurrent: (snapshot) =>
-        snapshot?.accountId === undefined ||
-        snapshot.accountId === this.databaseManager.activeAccountId,
-      onChange: () => {
-        for (const [scope, server, modelId] of localServers) {
-          if (server.isRemote || !modelId()) continue;
-          const denied = this._localModelPolicy.activeFailure(scope, modelId());
-          if (denied) {
-            void server.stop().catch((error) =>
-              debugLogger.warn("Could not stop policy-blocked local server", {
-                error: error.message,
-              })
-            );
-          }
-        }
-        if (this._activeLocalMeetingLease) {
-          try {
-            this._localModelPolicy.assertCurrent(this._activeLocalMeetingLease);
-          } catch (error) {
-            // cancelJobs' abort: its callers stop the meeting themselves, as an account change.
-            // Anything that isn't the policy's refusal is not the organization's either.
-            if (isLocalModelPolicyRefusal(error) && error.code !== "POLICY_UNRESOLVABLE")
-              this._stopMeetingForPolicy?.(error.code);
-          }
-        }
-      },
-    });
-    for (const manager of [
-      this.whisperManager,
-      this.parakeetManager,
-      this.parakeetManager.serverManager,
-      localLlmManager,
-      ...localServers.map(([, server]) => server),
-    ]) {
-      manager.localModelPolicy = this._localModelPolicy;
-    }
-    const samePath = (actual, expected) =>
-      typeof actual === "string" && path.resolve(actual) === path.resolve(expected);
-    // Retired models included: a server started before a retirement keeps serving.
-    this.whisperManager.serverManager.localModelIdForPath = (modelPath) =>
-      listRunnableLocalModels("whisperModels").find(([id]) =>
-        samePath(modelPath, this.whisperManager.getModelPath(id))
-      )?.[0];
-    this.parakeetManager.serverManager.wsServer.localModelIdForPath = (modelPath, id) =>
-      getRunnableSpeechModel("parakeetModels", id) &&
-      samePath(modelPath, this.parakeetManager.getModelPath(id))
-        ? id
-        : undefined;
-    localLlmManager.serverManager.localModelIdForPath = (modelPath) =>
-      listRunnableLocalModels("localProviders").find(
-        ([, model]) =>
-          model.fileName &&
-          samePath(modelPath, path.join(localLlmManager.getModelsDir(), model.fileName))
-      )?.[0];
-  }
-
-  // Called once a cookie session has had its bearer migration: before that, a
-  // session with no bearer would read as a proven guest.
-  loadLocalModelPolicy() {
-    void this._localModelPolicy.resolve().catch(() => {});
-  }
+  loadLocalModelPolicy() {}
 
   _handleAuthTokenChange({ generation, token }) {
     this._meetingAdmission?.cancelPending();
@@ -1225,8 +1079,6 @@ class IPCHandlers {
       broadcastToWindows("active-account-scope-changed", null);
       this._broadcastDatabaseAccountScope();
       if (scopeChanged) this._broadcastAccountScopedSettings();
-      // As set-active-account-scope does: a connect can't outlive its account.
-      this.connectorManager?.accountChanged();
     }
     this.updateManager?.invalidatePolicy();
     const effectivePolicy = this.effectivePolicyManager?.invalidate();
@@ -1238,8 +1090,6 @@ class IPCHandlers {
       generation,
       hasToken: Boolean(token),
     });
-    // A sign-out or another account changes whose login shows.
-    void this.connectorManager?.notifyStatusChanged();
   }
 
   // A failed claim leaves the notes where they were, visible signed out, and
@@ -1733,8 +1583,7 @@ class IPCHandlers {
   }
 
   async _logDetectedGpus() {
-    const { listNvidiaGpus } = require("../utils/gpuDetection");
-    const gpus = await listNvidiaGpus();
+    const gpus = [];
     if (gpus.length > 0) {
       debugLogger.info(
         "NVIDIA GPUs detected",
@@ -2056,8 +1905,6 @@ class IPCHandlers {
       retireStreaming(this[key]);
       this[key] = null;
     }
-    this.googleCalendarManager?.stop();
-    this.microsoftCalendarManager?.stop();
   }
 
   _retireDisallowedProductWork(snapshot) {
@@ -2075,40 +1922,11 @@ class IPCHandlers {
     const meetingOptions = this.getMeetingTranscriptionOptions?.();
     if (meetingOptions && !allowed("meeting-transcription", [meetingOptions]))
       this._stopMeetingForPolicy?.("policyRestricted");
-    if (!allowed("gcal-start-oauth")) {
-      this.googleCalendarManager?.stop();
-      this.microsoftCalendarManager?.stop();
-      this._remoteCalendarsStarted = false;
-    }
-  }
-
-  _startRemoteProductWork() {
-    if (!this._remoteCalendarsReady || this._remoteCalendarsStarted) return;
-    if (
-      !productOperationAllowed(
-        this.effectivePolicyManager.getCurrent(),
-        app.getVersion(),
-        "gcal-start-oauth"
-      )
-    )
-      return;
-    this._remoteCalendarsStarted = true;
-    this.googleCalendarManager?.start();
-    this.microsoftCalendarManager?.start();
-  }
-
-  startPolicyCalendars() {
-    this._remoteCalendarsReady = true;
-    const snapshot = this.effectivePolicyManager.getCurrent();
-    if (snapshot.success && !snapshot.localOnly) this._startRemoteProductWork();
   }
 
   setupHandlers() {
     this._remoteStreamPolicies = new Map();
     this._retireAccountProductStreams = (accountId) => {
-      this.googleCalendarManager?.stop();
-      this.microsoftCalendarManager?.stop();
-      this._remoteCalendarsStarted = false;
       for (const [property, operation] of this._remoteStreamPolicies) {
         if (operation.accountId !== accountId) continue;
         if (operation.pending) {
@@ -2990,259 +2808,6 @@ class IPCHandlers {
       }
     );
 
-    // Dictionary handlers
-    ipcMain.on("auto-learn-changed", (_event, enabled) => {
-      // Both renderer windows re-sync this on mount — ignore same-value updates (#1080).
-      const { changed, enabled: next } = applyAutoLearnSetting(this._autoLearnEnabled, enabled);
-      if (!changed) return;
-      this._autoLearnEnabled = next;
-      if (!this._autoLearnEnabled) {
-        if (this._autoLearnDebounceTimer) {
-          clearTimeout(this._autoLearnDebounceTimer);
-          this._autoLearnDebounceTimer = null;
-        }
-        this._autoLearnLatestData = null;
-      }
-      debugLogger.debug("[AutoLearn] Setting changed", { enabled: this._autoLearnEnabled });
-    });
-
-    ipcMain.handle("db-get-dictionary", async () => {
-      return this.databaseManager.getDictionary();
-    });
-
-    // `listsAccountId`: whose list the sending window shows. Until the account
-    // change reaches it, saving would copy the last account's list into this one.
-    const isListFromOtherAccount = (listsAccountId) =>
-      listsAccountId !== undefined && listsAccountId !== this.databaseManager.activeAccountId;
-
-    ipcMain.handle("db-set-dictionary", async (event, words, listsAccountId) => {
-      if (!Array.isArray(words)) {
-        throw new Error("words must be an array");
-      }
-      if (isListFromOtherAccount(listsAccountId)) return { success: false, stale: true };
-      const result = this.databaseManager.setDictionary(words);
-      this.parakeetManager.refreshHotwordsSoon();
-      return result;
-    });
-
-    ipcMain.handle("db-seed-dictionary", async (_event, words) => {
-      if (!Array.isArray(words)) {
-        throw new Error("words must be an array");
-      }
-      const result = this.databaseManager.seedDictionary(words);
-      if (result.seeded) this.parakeetManager.refreshHotwordsSoon();
-      return result;
-    });
-
-    ipcMain.handle("db-apply-dictionary-changes", async (_event, changes, listsAccountId) => {
-      const { add, remove } = changes ?? {};
-      if (add !== undefined && !Array.isArray(add)) {
-        throw new Error("add must be an array");
-      }
-      if (remove !== undefined && !Array.isArray(remove)) {
-        throw new Error("remove must be an array");
-      }
-      if (isListFromOtherAccount(listsAccountId)) {
-        return { success: false, added: 0, removed: 0, stale: true };
-      }
-      const result = this.databaseManager.applyDictionaryChanges({ add, remove });
-      this.parakeetManager.refreshHotwordsSoon();
-      return result;
-    });
-
-    ipcMain.handle("db-get-pending-dictionary", async () => {
-      return this.databaseManager.getPendingDictionary();
-    });
-
-    ipcMain.handle("db-get-pending-dictionary-deletes", async () => {
-      return this.databaseManager.getPendingDictionaryDeletes();
-    });
-
-    ipcMain.handle("db-get-dictionary-by-client-id", async (_event, clientDictId) => {
-      return this.databaseManager.getDictionaryEntryByClientId(clientDictId);
-    });
-
-    ipcMain.handle(
-      "db-upsert-dictionary-from-cloud",
-      async (_event, cloudEntry, expectedAuthGeneration) => {
-        if (isStaleSyncAck(expectedAuthGeneration)) return STALE_SYNC_ACK;
-        return this.databaseManager.upsertDictionaryFromCloud(cloudEntry);
-      }
-    );
-
-    ipcMain.handle(
-      "db-mark-dictionary-synced",
-      async (
-        _event,
-        id,
-        cloudId,
-        serverUpdatedAt,
-        expectedWord,
-        expectedSource,
-        serverSource,
-        pushed,
-        expectedAuthGeneration
-      ) => {
-        if (isStaleSyncAck(expectedAuthGeneration)) return STALE_SYNC_ACK;
-        return this.databaseManager.markDictionaryEntrySynced(
-          id,
-          cloudId,
-          serverUpdatedAt,
-          expectedWord,
-          expectedSource,
-          serverSource,
-          pushed
-        );
-      }
-    );
-
-    ipcMain.handle("db-hard-delete-dictionary", async (_event, id, expectedAuthGeneration) => {
-      if (isStaleSyncAck(expectedAuthGeneration)) return STALE_SYNC_ACK;
-      return this.databaseManager.hardDeleteDictionaryEntry(id);
-    });
-
-    ipcMain.handle("db-clear-dictionary-cloud-id", async (_event, id, expectedAuthGeneration) => {
-      if (isStaleSyncAck(expectedAuthGeneration)) return { success: false, stale: true };
-      return this.databaseManager.clearDictionaryCloudId(id);
-    });
-
-    ipcMain.handle("db-keep-newer-dictionary-edit", async (_event, id, expectedAuthGeneration) => {
-      if (isStaleSyncAck(expectedAuthGeneration)) return STALE_SYNC_ACK;
-      return this.databaseManager.keepNewerDictionaryEdit(id);
-    });
-
-    ipcMain.handle("db-get-dictionary-entries-by-words", async (_event, words) => {
-      if (!Array.isArray(words)) throw new Error("words must be an array");
-      return this.databaseManager.getDictionaryEntriesByWords(words);
-    });
-
-    ipcMain.handle("db-mark-dictionary-words-shared", async (_event, words, sharedAt, options) => {
-      if (!Array.isArray(words)) throw new Error("words must be an array");
-      const pendingWords = options?.pendingWords ?? [];
-      if (!Array.isArray(pendingWords)) throw new Error("pendingWords must be an array");
-      if (isStaleSyncAck(options?.expectedAuthGeneration)) return { marked: [], stale: true };
-      return this.databaseManager.markDictionaryWordsShared(words, sharedAt, { pendingWords });
-    });
-
-    ipcMain.handle("db-retire-moved-dictionary-words", async (_event, words, options) => {
-      if (!Array.isArray(words)) throw new Error("words must be an array");
-      if (isStaleSyncAck(options?.expectedAuthGeneration)) return { retired: [], stale: true };
-      return this.databaseManager.retireMovedDictionaryWords(words, {
-        includeSynced: options?.includeSynced !== false,
-      });
-    });
-
-    ipcMain.handle("db-revive-retired-dictionary-words", async (_event, words, options) => {
-      if (!Array.isArray(words)) throw new Error("words must be an array");
-      if (isStaleSyncAck(options?.expectedAuthGeneration)) return { revived: [], stale: true };
-      return this.databaseManager.reviveRetiredDictionaryWords(words);
-    });
-
-    ipcMain.handle("db-get-moved-dictionary-words", async () => {
-      return this.databaseManager.getMovedDictionaryWords();
-    });
-
-    const requireWorkspaceId = (workspaceId) => {
-      if (typeof workspaceId !== "string" || !workspaceId) {
-        throw new Error("workspaceId must be a non-empty string");
-      }
-    };
-
-    ipcMain.handle("db-shared-dictionary-get", async (_event, workspaceId) => {
-      requireWorkspaceId(workspaceId);
-      return this.databaseManager.getSharedDictionary(workspaceId);
-    });
-
-    ipcMain.handle("db-shared-dictionary-apply-pull", async (_event, workspaceId, change) => {
-      requireWorkspaceId(workspaceId);
-      const { upserts = [], deletedIds = [], meta } = change ?? {};
-      if (!Array.isArray(upserts) || !Array.isArray(deletedIds)) {
-        throw new Error("upserts and deletedIds must be arrays");
-      }
-      return this.databaseManager.applySharedDictionaryPull(workspaceId, {
-        upserts,
-        deletedIds,
-        meta,
-      });
-    });
-
-    ipcMain.handle("db-shared-dictionary-replace", async (_event, workspaceId, full) => {
-      requireWorkspaceId(workspaceId);
-      if (!Array.isArray(full?.entries)) throw new Error("entries must be an array");
-      return this.databaseManager.replaceSharedDictionary(workspaceId, {
-        entries: full.entries,
-        meta: full.meta,
-      });
-    });
-
-    ipcMain.handle("db-shared-dictionary-apply-hides", async (_event, workspaceId, change) => {
-      requireWorkspaceId(workspaceId);
-      const { hidden = [], unhidden = [] } = change ?? {};
-      if (!Array.isArray(hidden) || !Array.isArray(unhidden)) {
-        throw new Error("hidden and unhidden must be arrays");
-      }
-      return this.databaseManager.applySharedDictionaryHides(workspaceId, { hidden, unhidden });
-    });
-
-    ipcMain.handle("db-shared-dictionary-replace-hides", async (_event, workspaceId, hidden) => {
-      requireWorkspaceId(workspaceId);
-      if (!Array.isArray(hidden)) throw new Error("hidden must be an array");
-      return this.databaseManager.replaceSharedDictionaryHides(workspaceId, hidden);
-    });
-
-    ipcMain.handle("db-shared-dictionary-clear", async (_event, workspaceId) => {
-      if (workspaceId != null) requireWorkspaceId(workspaceId);
-      return this.databaseManager.clearSharedDictionary(workspaceId);
-    });
-
-    ipcMain.handle("db-shared-dictionary-prune", async (_event, keepWorkspaceIds) => {
-      if (!Array.isArray(keepWorkspaceIds)) throw new Error("keepWorkspaceIds must be an array");
-      keepWorkspaceIds.forEach(requireWorkspaceId);
-      return this.databaseManager.pruneSharedDictionary(keepWorkspaceIds);
-    });
-
-    ipcMain.handle("dictionary-set-shared-hints", async (_event, promptHints, hotwordHints) => {
-      const isWordList = (value) =>
-        Array.isArray(value) && value.every((word) => typeof word === "string");
-      const isHints = (value) => isWordList(value?.space) && isWordList(value?.workspace);
-      if (!isHints(promptHints)) return;
-      this._sharedDictionaryHints = {
-        space: [...promptHints.space],
-        workspace: [...promptHints.workspace],
-      };
-
-      const suppressed = hotwordHints?.suppressedPersonal;
-      const accountId = hotwordHints?.accountId ?? null;
-      if (
-        !isHints(hotwordHints) ||
-        (suppressed !== undefined && !isWordList(suppressed)) ||
-        (accountId !== null && (typeof accountId !== "string" || !accountId))
-      ) {
-        this._clearDictionaryHotwordHints();
-        return;
-      }
-      const activeAccountId = this.databaseManager.activeAccountId;
-      // A saved snapshot can arrive before startup validates its owner. Once
-      // bound, ignore late snapshots from another account.
-      if (!accountId || (activeAccountId !== null && accountId !== activeAccountId)) return;
-      this._dictionaryHotwordHints = {
-        accountId,
-        space: [...hotwordHints.space],
-        workspace: [...hotwordHints.workspace],
-        suppressedPersonal: new Set((suppressed ?? []).map(dictionaryWordKey)),
-      };
-      this.parakeetManager.refreshHotwordsSoon();
-    });
-
-    ipcMain.handle("db-broadcast-dictionary-updated", async () => {
-      // Emit the normalized list straight from SQLite so renderers see the
-      // post-dedupe truth, never a caller-supplied payload.
-      const words = this.databaseManager.getDictionary();
-      broadcastToWindows("dictionary-updated", words);
-      this.parakeetManager.refreshHotwordsSoon();
-      return { success: true };
-    });
-
     ipcMain.handle("db-get-snippets", async () => {
       return this.databaseManager.getSnippets();
     });
@@ -3895,8 +3460,6 @@ class IPCHandlers {
       );
       this._broadcastDatabaseAccountScope();
       if (accountChanged) this._broadcastAccountScopedSettings();
-      this.connectorManager?.accountChanged();
-      void this.connectorManager?.notifyStatusChanged();
       void this.metaActivation?.flush();
       void this.productEvents?.flush();
       return { success: true };
@@ -3937,13 +3500,6 @@ class IPCHandlers {
           };
         }
         try {
-          // Best effort; each revoke has a 5s deadline (connectorManager.js).
-          // Erasing the device takes the calendar logins with it, so a grant
-          // Gmail shares with a calendar is revoked too: cleanup-app runs
-          // after this and finds no Gmail login left to revoke.
-          await this.connectorManager?.disconnectAll({
-            erasingDevice: options?.erasingDevice === true,
-          });
           const snapshots = this._captureMirrorDeletionNotes({ account_id: accountId });
           const result = this.databaseManager.deleteAccountData(accountId);
           let productEventsFailure;
@@ -4892,26 +4448,6 @@ class IPCHandlers {
       }
     });
 
-    ipcMain.handle("export-dictionary", async (event, words) => {
-      try {
-        const { dialog } = require("electron");
-        const fs = require("fs");
-
-        const result = await dialog.showSaveDialog({
-          defaultPath: "dictionary.txt",
-          filters: [{ name: "Text", extensions: ["txt"] }],
-        });
-
-        if (result.canceled || !result.filePath) return { success: false };
-
-        fs.writeFileSync(result.filePath, words.join("\n"), "utf-8");
-        return { success: true };
-      } catch (error) {
-        debugLogger.error("Error exporting dictionary", { error: error.message }, "dictionary");
-        return { success: false, error: error.message };
-      }
-    });
-
     handleAudioFeature("select-audio-file", "upload", async (event, options = {}) => {
       const { dialog } = require("electron");
       const properties = ["openFile"];
@@ -5311,739 +4847,6 @@ class IPCHandlers {
       return { success: true };
     });
 
-    handleProduct("transcribe-local-whisper", async (_event, audioBlob, options = {}) => {
-      debugLogger.log("transcribe-local-whisper called", {
-        audioBlobType: typeof audioBlob,
-        audioBlobSize: audioBlob?.byteLength || audioBlob?.length || 0,
-        options,
-      });
-
-      try {
-        // skipVad: dictionary-echo rescue retries decode VAD-free, since VAD
-        // stripping the speech is what turned the transcript into prompt echo.
-        const { skipVad, ...requestOptions } = options;
-        const vadOptions = skipVad
-          ? { vadEnabled: false }
-          : this._resolveWhisperVadOptions("dictation");
-        const result = await this.whisperManager.transcribeLocalWhisper(audioBlob, {
-          ...requestOptions,
-          ...vadOptions,
-          signal: this._productRequestContext.getStore().signal,
-        });
-
-        debugLogger.log("Whisper result", {
-          success: result.success,
-          hasText: !!result.text,
-          message: result.message,
-          error: result.error,
-        });
-
-        return result;
-      } catch (error) {
-        debugLogger.error("Local Whisper transcription error", error);
-        if (isLocalModelPolicyRefusal(error))
-          return { success: false, error: error.message, code: error.code };
-        const errorMessage = error.message || "Unknown error";
-
-        // Return specific error types for better user feedback
-        if (errorMessage.includes("FFmpeg not found")) {
-          return {
-            success: false,
-            error: "ffmpeg_not_found",
-            message: "FFmpeg is missing. Please reinstall the app or install FFmpeg manually.",
-          };
-        }
-        if (
-          errorMessage.includes("FFmpeg conversion failed") ||
-          errorMessage.includes("FFmpeg process error")
-        ) {
-          return {
-            success: false,
-            error: "ffmpeg_error",
-            message: "Audio conversion failed. The recording may be corrupted.",
-          };
-        }
-        if (
-          errorMessage.includes("whisper.cpp not found") ||
-          errorMessage.includes("whisper-cpp")
-        ) {
-          return {
-            success: false,
-            error: "whisper_not_found",
-            message: "Whisper binary is missing. Please reinstall the app.",
-          };
-        }
-        if (
-          errorMessage.includes("Audio buffer is empty") ||
-          errorMessage.includes("Audio data too small")
-        ) {
-          return {
-            success: false,
-            error: "no_audio_data",
-            message: "No audio detected",
-          };
-        }
-        if (errorMessage.includes("model") && errorMessage.includes("not downloaded")) {
-          return {
-            success: false,
-            error: "model_not_found",
-            message: errorMessage,
-          };
-        }
-
-        throw error;
-      }
-    });
-
-    ipcMain.handle("check-whisper-installation", async (event) => {
-      return this.whisperManager.checkWhisperInstallation();
-    });
-
-    ipcMain.handle("get-audio-diagnostics", async () => {
-      return this.whisperManager.getDiagnostics();
-    });
-
-    ipcMain.handle("download-whisper-model", async (event, modelName) => {
-      const hadActiveDownload = this.localModelDownloadStatus.has("whisper", modelName);
-      this.localModelDownloadStatus.start("whisper", modelName);
-      try {
-        const result = await this.whisperManager.downloadWhisperModel(modelName, (progressData) => {
-          const status = this._updateNativeModelDownloadStatus("whisper", modelName, progressData);
-          this.windowManager.sendToControlPanel("whisper-download-progress", {
-            ...progressData,
-            sequence: status?.sequence,
-          });
-        });
-        const status = this.localModelDownloadStatus.has("whisper", modelName)
-          ? this.localModelDownloadStatus.finish("whisper", modelName)
-          : null;
-        if (status) {
-          this.windowManager.sendToControlPanel("whisper-download-progress", {
-            type: "complete",
-            model: modelName,
-            percentage: 100,
-            sequence: status.sequence,
-          });
-        }
-        return result;
-      } catch (error) {
-        const status = hadActiveDownload
-          ? null
-          : this.localModelDownloadStatus.finish("whisper", modelName);
-        if (!hadActiveDownload && error.code !== "DOWNLOAD_IN_PROGRESS") {
-          this.windowManager.sendToControlPanel("whisper-download-progress", {
-            type: "error",
-            model: modelName,
-            error: error.message,
-            code: error.code || "DOWNLOAD_FAILED",
-            sequence: status?.sequence,
-          });
-        }
-        return {
-          success: false,
-          error: error.message,
-          code: error.code || "DOWNLOAD_FAILED",
-        };
-      }
-    });
-
-    ipcMain.handle("check-model-status", async (event, modelName) => {
-      return this.whisperManager.checkModelStatus(modelName);
-    });
-
-    ipcMain.handle("list-whisper-models", async (event) => {
-      return this.whisperManager.listWhisperModels();
-    });
-
-    ipcMain.handle("delete-whisper-model", async (event, modelName) => {
-      return this.whisperManager.deleteWhisperModel(modelName);
-    });
-
-    ipcMain.handle("delete-all-whisper-models", async () => {
-      return this.whisperManager.deleteAllWhisperModels();
-    });
-
-    ipcMain.handle("cancel-whisper-download", async (event) => {
-      return this.whisperManager.cancelDownload();
-    });
-
-    ipcMain.handle("whisper-server-start", async (event, modelName) => {
-      return this.whisperManager.startServer(
-        modelName,
-        this.whisperManager.resolveGpuStartOptions()
-      );
-    });
-
-    ipcMain.handle("whisper-server-stop", async () => {
-      return this.whisperManager.stopServer();
-    });
-
-    ipcMain.handle("whisper-server-status", async () => {
-      return this.whisperManager.getServerStatus();
-    });
-
-    ipcMain.handle("detect-gpu", async () => {
-      const { detectNvidiaGpu } = require("../utils/gpuDetection");
-      return detectNvidiaGpu();
-    });
-
-    ipcMain.handle("list-gpus", async () => {
-      const { listNvidiaGpus } = require("../utils/gpuDetection");
-      return listNvidiaGpus();
-    });
-
-    ipcMain.handle("set-gpu-device-index", async (_event, purpose, uuid) => {
-      if (purpose !== "transcription" && purpose !== "intelligence") {
-        return { success: false };
-      }
-      // Empty string clears the pinned GPU; otherwise require an nvidia-smi UUID. See #531.
-      if (typeof uuid !== "string" || (uuid !== "" && !uuid.startsWith("GPU-"))) {
-        return { success: false };
-      }
-      const key = purpose === "intelligence" ? "INTELLIGENCE_GPU_UUID" : "TRANSCRIPTION_GPU_UUID";
-      const oldUuid = process.env[key] || "";
-      process.env[key] = uuid;
-      this.environmentManager.saveAllKeysToEnvFile().catch((err) => {
-        debugLogger.error("Failed to persist GPU UUID", { error: err.message }, "gpu");
-      });
-
-      if (oldUuid !== uuid) {
-        try {
-          if (purpose === "transcription" && this.whisperManager?.serverManager?.process) {
-            debugLogger.info(
-              "Restarting whisper-server for GPU change",
-              { from: oldUuid, to: uuid },
-              "gpu"
-            );
-            await this.whisperManager.restartServerWithGpuPreference();
-          }
-          if (purpose === "intelligence") {
-            const modelManager = require("./modelManagerBridge").default;
-            if (modelManager.serverManager?.process) {
-              debugLogger.info(
-                "Restarting llama-server for GPU change",
-                { from: oldUuid, to: uuid },
-                "gpu"
-              );
-              const modelId = modelManager.currentServerModelId;
-              await modelManager.serverManager.stop();
-              if (modelId) {
-                await modelManager.prewarmServer(modelId);
-              }
-            }
-          }
-        } catch (err) {
-          debugLogger.error(
-            "Failed to restart server after GPU change",
-            { error: err.message, purpose },
-            "gpu"
-          );
-        }
-      }
-
-      return { success: true };
-    });
-
-    ipcMain.handle("get-gpu-device-index", async (_event, purpose) => {
-      if (purpose !== "transcription" && purpose !== "intelligence") {
-        return "";
-      }
-      const key = purpose === "intelligence" ? "INTELLIGENCE_GPU_UUID" : "TRANSCRIPTION_GPU_UUID";
-      return process.env[key] || "";
-    });
-
-    ipcMain.handle("get-cuda-whisper-status", async () => {
-      const { detectNvidiaGpu } = require("../utils/gpuDetection");
-      const gpuInfo = await detectNvidiaGpu();
-      if (!this.whisperCudaManager) {
-        return { downloaded: false, needsUpdate: false, downloading: false, path: null, gpuInfo };
-      }
-      return {
-        downloaded: this.whisperCudaManager.isDownloaded(),
-        needsUpdate: this.whisperCudaManager.needsUpdate(),
-        downloading: this.whisperCudaManager.isDownloading(),
-        path: this.whisperCudaManager.getCudaBinaryPath(),
-        gpuInfo,
-        ...this._whisperGpuFailureStatus("cuda"),
-        inUse: this.whisperManager.resolveGpuPackInUse() === "cuda",
-        bundledGpu: this._whisperBundledGpu(),
-      };
-    });
-
-    ipcMain.handle("download-cuda-whisper-binary", async (event) => {
-      if (!this.whisperCudaManager) {
-        return { success: false, error: "CUDA not supported on this platform" };
-      }
-      try {
-        const reloadModel = this._whisperReloadModel();
-        // Stop the server first: swapping in a pack a running binary is loaded
-        // from EBUSYs on Windows (same rule as the Vulkan handler below)
-        await this.whisperManager.stopServer().catch(() => {});
-        await this.whisperCudaManager.download((downloaded, total) => {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send("cuda-download-progress", {
-              downloadedBytes: downloaded,
-              totalBytes: total,
-              percentage: total > 0 ? Math.round((downloaded / total) * 100) : 0,
-            });
-          }
-        });
-        this._syncStartupEnv({ WHISPER_CUDA_ENABLED: "true" });
-        this._clearWhisperGpuFailure("cuda");
-        return { success: true, willRestart: this._applyWhisperGpuPreference(reloadModel) };
-      } catch (error) {
-        debugLogger.error("CUDA binary download failed", {
-          error: error.message,
-          stack: error.stack,
-        });
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("cancel-cuda-whisper-download", async () => {
-      if (!this.whisperCudaManager) return { success: false };
-      return this.whisperCudaManager.cancelDownload();
-    });
-
-    ipcMain.handle("delete-cuda-whisper-binary", async () => {
-      if (!this.whisperCudaManager) return { success: false };
-      const reloadModel = this._whisperReloadModel();
-      // Stop the server first so the running binary can be deleted on Windows
-      await this.whisperManager.stopServer().catch(() => {});
-      const result = await this.whisperCudaManager.delete();
-      if (result.success) {
-        this._syncStartupEnv({}, ["WHISPER_CUDA_ENABLED"]);
-        this._clearWhisperGpuFailure("cuda");
-        this._applyWhisperGpuPreference(reloadModel);
-      }
-      return result;
-    });
-
-    ipcMain.handle("get-vulkan-whisper-status", async () => {
-      const { detectVulkanGpu } = require("../utils/vulkanDetection");
-      const { detectNvidiaGpu } = require("../utils/gpuDetection");
-      const [vulkan, gpuInfo] = await Promise.all([detectVulkanGpu(), detectNvidiaGpu()]);
-      return {
-        downloaded: this.whisperVulkanManager?.isDownloaded() ?? false,
-        needsUpdate: this.whisperVulkanManager?.needsUpdate() ?? false,
-        downloading: this.whisperVulkanManager?.isDownloading() ?? false,
-        vulkan,
-        hasNvidiaGpu: gpuInfo.hasNvidiaGpu,
-        ...this._whisperGpuFailureStatus("vulkan"),
-        inUse: this.whisperManager.resolveGpuPackInUse() === "vulkan",
-        bundledGpu: this._whisperBundledGpu(),
-      };
-    });
-
-    ipcMain.handle("download-vulkan-whisper-binary", async (event) => {
-      if (!this.whisperVulkanManager) {
-        return { success: false, error: "Vulkan not supported on this platform" };
-      }
-      try {
-        const reloadModel = this._whisperReloadModel();
-        // Stop the server first: overwriting a running binary EBUSYs on Windows
-        await this.whisperManager.stopServer().catch(() => {});
-        await this.whisperVulkanManager.download((downloaded, total) => {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send("vulkan-whisper-download-progress", {
-              downloadedBytes: downloaded,
-              totalBytes: total,
-              percentage: total > 0 ? Math.round((downloaded / total) * 100) : 0,
-            });
-          }
-        });
-        this._syncStartupEnv({ WHISPER_VULKAN_ENABLED: "true" });
-        this._clearWhisperGpuFailure("vulkan");
-        return { success: true, willRestart: this._applyWhisperGpuPreference(reloadModel) };
-      } catch (error) {
-        debugLogger.error("Vulkan whisper binary download failed", {
-          error: error.message,
-          stack: error.stack,
-        });
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("cancel-vulkan-whisper-download", async () => {
-      if (!this.whisperVulkanManager) return { success: false };
-      return { success: this.whisperVulkanManager.cancelDownload() };
-    });
-
-    ipcMain.handle("delete-vulkan-whisper-binary", async () => {
-      if (!this.whisperVulkanManager) return { success: false };
-      const reloadModel = this._whisperReloadModel();
-      // Stop the server first so the running binary can be deleted on Windows
-      await this.whisperManager.stopServer().catch(() => {});
-      const { deletedCount } = await this.whisperVulkanManager.delete();
-      this._syncStartupEnv({}, ["WHISPER_VULKAN_ENABLED", "WHISPER_VULKAN_DEVICE"]);
-      this._clearWhisperGpuFailure("vulkan");
-      this._applyWhisperGpuPreference(reloadModel);
-      return { success: true, deletedCount };
-    });
-
-    // One-time "GPU pack needs re-downloading" notice recorded before any
-    // window existed (#1606). Only the window that shows it can take it.
-    ipcMain.handle("take-gpu-pack-migration-notice", (event) => {
-      if (event.sender !== this._gpuPackNoticeWindow()?.webContents) return null;
-      return require("./gpuPackMigrationNotice").take();
-    });
-
-    // Clears the remembered GPU failure and reloads the server with the GPU
-    // backend re-enabled (Retry on the "GPU could not be activated" state)
-    ipcMain.handle("whisper-gpu-retry", async () => {
-      this.whisperManager.forgetSessionGpuFailures();
-      this._syncStartupEnv({}, [
-        "WHISPER_GPU_FAILED",
-        ...Object.values(WHISPER_GPU_FAILURE_REASON_KEYS),
-      ]);
-      return {
-        success: true,
-        willRestart: this._applyWhisperGpuPreference(this._whisperReloadModel()),
-      };
-    });
-
-    ipcMain.handle("check-ffmpeg-availability", async (event) => {
-      return this.whisperManager.checkFFmpegAvailability();
-    });
-
-    handleProduct("transcribe-local-parakeet", async (_event, audioBlob, options = {}) => {
-      debugLogger.log("transcribe-local-parakeet called", {
-        audioBlobType: typeof audioBlob,
-        audioBlobSize: audioBlob?.byteLength || audioBlob?.length || 0,
-        options,
-      });
-
-      try {
-        const result = await this.parakeetManager.transcribeLocalParakeet(audioBlob, {
-          ...options,
-          signal: this._productRequestContext.getStore().signal,
-        });
-
-        debugLogger.log("Parakeet result", {
-          success: result.success,
-          hasText: !!result.text,
-          message: result.message,
-          error: result.error,
-        });
-
-        return result;
-      } catch (error) {
-        debugLogger.error("Local Parakeet transcription error", error);
-        if (isLocalModelPolicyRefusal(error))
-          return { success: false, error: error.message, code: error.code };
-        const errorMessage = error.message || "Unknown error";
-
-        if (errorMessage.includes("sherpa-onnx") && errorMessage.includes("not found")) {
-          return {
-            success: false,
-            error: "parakeet_not_found",
-            message: "Parakeet binary is missing. Please reinstall the app.",
-          };
-        }
-        if (errorMessage.includes("model") && errorMessage.includes("not downloaded")) {
-          return {
-            success: false,
-            error: "model_not_found",
-            message: errorMessage,
-          };
-        }
-        if (error.code === PARAKEET_UNSUPPORTED_OS_CODE) {
-          return {
-            success: false,
-            error: error.code,
-            message: errorMessage,
-          };
-        }
-
-        throw error;
-      }
-    });
-
-    ipcMain.handle("check-parakeet-installation", async () => {
-      return this.parakeetManager.checkInstallation();
-    });
-
-    ipcMain.handle("download-parakeet-model", async (event, modelName) => {
-      const hadActiveDownload = this.localModelDownloadStatus.has("parakeet", modelName);
-      this.localModelDownloadStatus.start("parakeet", modelName);
-      try {
-        const result = await this.parakeetManager.downloadParakeetModel(
-          modelName,
-          (progressData) => {
-            const status = this._updateNativeModelDownloadStatus(
-              "parakeet",
-              modelName,
-              progressData
-            );
-            this.windowManager.sendToControlPanel("parakeet-download-progress", {
-              ...progressData,
-              sequence: status?.sequence,
-            });
-          }
-        );
-        const status = this.localModelDownloadStatus.has("parakeet", modelName)
-          ? this.localModelDownloadStatus.finish("parakeet", modelName)
-          : null;
-        if (status) {
-          this.windowManager.sendToControlPanel("parakeet-download-progress", {
-            type: "complete",
-            model: modelName,
-            percentage: 100,
-            sequence: status.sequence,
-          });
-        }
-        return result;
-      } catch (error) {
-        const status = hadActiveDownload
-          ? null
-          : this.localModelDownloadStatus.finish("parakeet", modelName);
-        if (!hadActiveDownload && error.code !== "DOWNLOAD_IN_PROGRESS") {
-          this.windowManager.sendToControlPanel("parakeet-download-progress", {
-            type: "error",
-            model: modelName,
-            error: error.message,
-            code: error.code || "DOWNLOAD_FAILED",
-            sequence: status?.sequence,
-          });
-        }
-        return {
-          success: false,
-          error: error.message,
-          code: error.code || "DOWNLOAD_FAILED",
-        };
-      }
-    });
-
-    ipcMain.handle("check-parakeet-model-status", async (_event, modelName) => {
-      return this.parakeetManager.checkModelStatus(modelName);
-    });
-
-    ipcMain.handle("list-parakeet-models", async () => {
-      return this.parakeetManager.listParakeetModels();
-    });
-
-    ipcMain.handle("delete-parakeet-model", async (_event, modelName) => {
-      return this.parakeetManager.deleteParakeetModel(modelName);
-    });
-
-    ipcMain.handle("delete-all-parakeet-models", async () => {
-      return this.parakeetManager.deleteAllParakeetModels();
-    });
-
-    ipcMain.handle("cancel-parakeet-download", async () => {
-      return this.parakeetManager.cancelDownload();
-    });
-
-    ipcMain.handle("get-parakeet-diagnostics", async () => {
-      return this.parakeetManager.getDiagnostics();
-    });
-
-    ipcMain.handle("parakeet-server-start", async (event, modelName) => {
-      const result = await this.parakeetManager.startServer(modelName);
-      // Persisting a provider that failed to start would wedge every launch
-      // into a failing pre-warm.
-      if (result.success) {
-        process.env.LOCAL_TRANSCRIPTION_PROVIDER =
-          getModelType(modelName) === "cohere-transcribe" ? "cohere" : "nvidia";
-        process.env.PARAKEET_MODEL = modelName;
-        await this.environmentManager.saveAllKeysToEnvFile();
-      }
-      return result;
-    });
-
-    ipcMain.handle("parakeet-server-stop", async () => {
-      const result = await this.parakeetManager.stopServer();
-      delete process.env.LOCAL_TRANSCRIPTION_PROVIDER;
-      delete process.env.PARAKEET_MODEL;
-      await this.environmentManager.saveAllKeysToEnvFile();
-      return result;
-    });
-
-    ipcMain.handle("parakeet-server-status", async () => {
-      return this.parakeetManager.getServerStatus();
-    });
-
-    // Diarization model management
-    ipcMain.handle("download-diarization-models", async (event) => {
-      try {
-        const result = await this.diarizationManager.downloadModels((progressData) => {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send("diarization-download-progress", progressData);
-          }
-        });
-        return result;
-      } catch (error) {
-        if (!event.sender.isDestroyed()) {
-          event.sender.send("diarization-download-progress", {
-            type: "error",
-            error: error.message,
-            code: error.code || "DOWNLOAD_FAILED",
-          });
-        }
-        return {
-          success: false,
-          error: error.message,
-          code: error.code || "DOWNLOAD_FAILED",
-        };
-      }
-    });
-
-    ipcMain.handle("get-diarization-model-status", async () => {
-      return {
-        available: this.diarizationManager?.isAvailable() ?? false,
-        modelsDownloaded:
-          (this.diarizationManager?.isModelDownloaded() ?? false) &&
-          (this.diarizationManager?.isVadModelDownloaded() ?? false),
-      };
-    });
-
-    ipcMain.handle("delete-diarization-models", async () => {
-      try {
-        await this.diarizationManager.deleteModels();
-        return { success: true };
-      } catch (error) {
-        debugLogger.error("Failed to delete diarization models", { error: error.message });
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("diarize-audio-file", async (event, filePath, options = {}) => {
-      // Registered under the same requestId as the upload's transcription, so
-      // one cancel kills both the decode and the diarization child process.
-      const cancel = this._uploadCancelRegistry.register(options.requestId);
-      return runAudioJob(event, "upload", cancel, async (signal) => {
-        try {
-          signal.throwIfAborted();
-          if (!this.diarizationManager) {
-            return { success: false, error: "Diarization not available" };
-          }
-          if (!this.diarizationManager.isModelDownloaded()) {
-            return { success: false, error: "Diarization models not downloaded" };
-          }
-
-          if (typeof filePath !== "string") {
-            return { success: false, error: "Invalid file path" };
-          }
-          const realPath = resolveAllowedAudioPath(filePath);
-          if (!realPath) return { success: false, error: "File path not allowed" };
-          filePath = realPath;
-
-          const maxSpeakers = normalizeStoredSpeakerCount(options.numSpeakers) ?? MAX_SPEAKER_COUNT;
-
-          const { convertToWav } = require("./ffmpegUtils");
-          const { getSafeTempDir } = require("./safeTempDir");
-          const {
-            resolveClusterThreshold,
-            dropNegligibleClusters,
-            isCollapsedDiarization,
-            capSpeakerClustersByVoice,
-          } = require("./diarizationPolicy");
-          const { PCM16_MONO_16K_BYTES_PER_SECOND } = require("./transcriptionTimeout");
-          const wavPath = path.join(getSafeTempDir(), `ow-diarize-${Date.now()}.wav`);
-
-          try {
-            await convertToWav(filePath, wavPath, { sampleRate: 16000, channels: 1 });
-            if (signal?.aborted) {
-              return { success: false, error: "Cancelled", code: "UPLOAD_CANCELLED" };
-            }
-            // Auto-clustering over-splits long single-mic audio at the 0.55
-            // default, so the threshold ramps with duration unless pinned.
-            const durationSeconds = fs.statSync(wavPath).size / PCM16_MONO_16K_BYTES_PER_SECOND;
-            const threshold = resolveClusterThreshold(durationSeconds, options.threshold);
-
-            // Always auto-cluster: forcing 2 clusters on #2021's two-person call
-            // split short utterances from long ones instead of one speaker from
-            // the other, merging both speakers. The requested count is applied
-            // as a cap after cleanup instead.
-            let segments = await this.diarizationManager.diarize(wavPath, { threshold, signal });
-            if (signal?.aborted) {
-              return { success: false, error: "Cancelled", code: "UPLOAD_CANCELLED" };
-            }
-            // A collapsed run's labels are wrong either way: two people under
-            // one label, or one person split off into a phantom. With no
-            // segments the renderer keeps the plain transcript and shows the
-            // diarization warning instead. Judged before phantoms are dropped;
-            // a request for one speaker is met by the cap below instead.
-            if (maxSpeakers > 1 && isCollapsedDiarization(segments)) {
-              debugLogger.warn("Discarding diarization: one cluster holds nearly all speech", {
-                durationSeconds,
-              });
-              segments = [];
-            }
-            // Raw sherpa output reaching the merge is how a 2-person voice memo
-            // surfaced 46 speakers.
-            segments = dropNegligibleClusters(segments);
-            if (new Set(segments.map((s) => s.speaker)).size > maxSpeakers) {
-              const speakerEmbeddings = require("./speakerEmbeddings");
-              let centroids = new Map();
-              try {
-                centroids = await speakerEmbeddings.extractClusterCentroids(wavPath, segments, {
-                  signal,
-                });
-              } catch (error) {
-                debugLogger.warn(
-                  "Speaker voices unavailable; extra clusters fold into the largest",
-                  {
-                    error: error.message,
-                  }
-                );
-              }
-              if (signal?.aborted) {
-                return { success: false, error: "Cancelled", code: "UPLOAD_CANCELLED" };
-              }
-              segments = capSpeakerClustersByVoice(segments, maxSpeakers, centroids, (a, b) =>
-                speakerEmbeddings.cosineSimilarity(a, b)
-              );
-            }
-            // Callers persist this as audio_duration_seconds: for picked files
-            // the renderer has no other duration source.
-            return { success: true, segments, durationSeconds };
-          } finally {
-            try {
-              fs.unlinkSync(wavPath);
-            } catch {}
-          }
-        } catch (error) {
-          if (error?.name === "AbortError" || signal?.aborted) {
-            debugLogger.debug("Diarization cancelled", { requestId: options.requestId });
-            return { success: false, error: "Cancelled", code: "UPLOAD_CANCELLED" };
-          }
-          debugLogger.error("Diarization error", { error: error.message });
-          return { success: false, error: error.message };
-        }
-      });
-    });
-
-    ipcMain.handle("merge-speaker-text", async (event, { segments, text, duration }) => {
-      try {
-        if (
-          !Array.isArray(segments) ||
-          typeof text !== "string" ||
-          typeof duration !== "number" ||
-          !isFinite(duration)
-        ) {
-          return { success: false, error: "Invalid arguments" };
-        }
-        if (segments.length > 10000 || text.length > 1_000_000) {
-          return { success: false, error: "Input too large" };
-        }
-        const sanitizedSegments = segments.map((s) => ({
-          speaker: typeof s.speaker === "string" ? s.speaker.slice(0, 100) : "unknown",
-          start: typeof s.start === "number" && isFinite(s.start) ? s.start : 0,
-          end: typeof s.end === "number" && isFinite(s.end) ? s.end : 0,
-        }));
-        const merged = mergeSpeakersWithText(sanitizedSegments, text, duration);
-        return { success: true, text: formatSpeakerTranscript(merged), segments: merged };
-      } catch (error) {
-        debugLogger.error("Speaker merge error", { error: error.message });
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("cancel-diarization-download", async () => {
-      return this.diarizationManager.cancelDownload();
-    });
-
     // Under `npm run dev` the Vite server dies with Electron, so a relaunched dev
     // instance would have no renderer: just quit there.
     ipcMain.handle("relaunch-app", async () => {
@@ -6096,21 +4899,6 @@ class IPCHandlers {
         errors.push(`Whisper stop: ${e.message}`);
       }
       try {
-        this.googleCalendarManager?.stop();
-      } catch (e) {
-        errors.push(`GCal stop: ${e.message}`);
-      }
-      try {
-        this.microsoftCalendarManager?.stop();
-      } catch (e) {
-        errors.push(`MCal stop: ${e.message}`);
-      }
-      try {
-        this.appleCalendarManager?.stop();
-      } catch (e) {
-        errors.push(`ACal stop: ${e.message}`);
-      }
-      try {
         await this.diarizationManager?.shutdown();
       } catch (e) {
         errors.push(`Diarization stop: ${e.message}`);
@@ -6125,26 +4913,6 @@ class IPCHandlers {
         await onnxWorkerClient.stop();
       } catch (e) {
         errors.push(`Embedding worker stop: ${e.message}`);
-      }
-
-      // Revoke Google OAuth tokens before DB is closed
-      try {
-        await this.googleCalendarManager?.revokeAllTokens();
-      } catch (e) {
-        errors.push(`GCal revoke: ${e.message}`);
-      }
-
-      // Revoke every connector login stored on this device (Slack, Gmail) at
-      // its provider, for every account: Settings signs out before this
-      // runs, so there may be no signed-in account left. It must run before
-      // the connectors directory is deleted below. Best effort: the revokes
-      // run in parallel under a 5 s deadline and never block the reset.
-      try {
-        await this.connectorManager?.revokeAllStored();
-      } catch (e) {
-        const { describeError } = require("./connectors/errorSummary");
-        const { errorName, errorCode } = describeError(e);
-        errors.push(`Connector revoke: ${errorCode ?? errorName}`);
       }
 
       try {
@@ -6191,18 +4959,6 @@ class IPCHandlers {
       } catch (e) {
         errors.push(`Parakeet models: ${e.message}`);
       }
-      try {
-        await this.diarizationManager?.deleteModels();
-      } catch (e) {
-        errors.push(`Diarization models: ${e.message}`);
-      }
-      try {
-        const modelManager = require("./modelManagerBridge").default;
-        await modelManager.deleteAllModels();
-      } catch (e) {
-        errors.push(`LLM models: ${e.message}`);
-      }
-
       // These caches are not owned by one account. Remove them only through
       // the explicit device-erasure path, never during normal account deletion.
       const homeCacheRoot = path.join(os.homedir(), ".cache", "openwhispr");
@@ -6639,164 +5395,6 @@ class IPCHandlers {
       }
     });
 
-    ipcMain.handle("model-get-all", async () => {
-      try {
-        debugLogger.debug("model-get-all called", undefined, "ipc");
-        const modelManager = require("./modelManagerBridge").default;
-        const models = await modelManager.getModelsWithStatus();
-        debugLogger.debug("Returning models", { count: models.length }, "ipc");
-        return models;
-      } catch (error) {
-        debugLogger.error("Error in model-get-all:", error);
-        throw error;
-      }
-    });
-
-    ipcMain.handle("model-get-active-downloads", async () => {
-      return this.localModelDownloadStatus.getActiveDownloads();
-    });
-
-    ipcMain.handle("model-check", async (_, modelId) => {
-      const modelManager = require("./modelManagerBridge").default;
-      return modelManager.isModelDownloaded(modelId);
-    });
-
-    ipcMain.handle("model-download", async (event, modelId) => {
-      if (this.localModelDownloadStatus.has("llm", modelId)) {
-        return {
-          success: false,
-          error: "Model is already being downloaded",
-          code: "DOWNLOAD_IN_PROGRESS",
-          details: { modelId },
-        };
-      }
-      // Claim ownership before the manager's asynchronous filesystem preflight.
-      this.localModelDownloadStatus.start("llm", modelId);
-      try {
-        const modelManager = require("./modelManagerBridge").default;
-        const result = await modelManager.downloadModel(
-          modelId,
-          (progress, downloadedSize, totalSize) => {
-            const status = this.localModelDownloadStatus.update("llm", modelId, {
-              phase: "downloading",
-              progress,
-              downloadedBytes: downloadedSize,
-              totalBytes: totalSize,
-            });
-            this.windowManager.sendToControlPanel("model-download-progress", {
-              modelId,
-              type: "progress",
-              progress,
-              downloadedSize,
-              totalSize,
-              sequence: status.sequence,
-            });
-          }
-        );
-        const status = this.localModelDownloadStatus.finish("llm", modelId);
-        this.windowManager.sendToControlPanel("model-download-progress", {
-          modelId,
-          type: "complete",
-          progress: 100,
-          downloadedSize: status?.downloadedBytes,
-          totalSize: status?.totalBytes,
-          sequence: status?.sequence,
-        });
-        return { success: true, path: result };
-      } catch (error) {
-        const status = this.localModelDownloadStatus.finish("llm", modelId);
-        if (error.code !== "DOWNLOAD_IN_PROGRESS") {
-          this.windowManager.sendToControlPanel("model-download-progress", {
-            modelId,
-            type: "error",
-            error: error.message,
-            code: error.code,
-            details: error.details,
-            sequence: status?.sequence,
-          });
-        }
-        return {
-          success: false,
-          error: error.message,
-          code: error.code,
-          details: error.details,
-        };
-      }
-    });
-
-    ipcMain.handle("model-delete", async (event, modelId) => {
-      try {
-        const modelManager = require("./modelManagerBridge").default;
-        await modelManager.deleteModel(modelId);
-        return { success: true };
-      } catch (error) {
-        return {
-          success: false,
-          error: error.message,
-          code: error.code,
-          details: error.details,
-        };
-      }
-    });
-
-    const retiredModelDirs = () => {
-      const { getModelsDirForService } = require("./modelDirUtils");
-      return {
-        whisperDir: getModelsDirForService("whisper"),
-        parakeetDir: getModelsDirForService("parakeet"),
-        llamaDir: require("./modelManagerBridge").default.getModelsDir(),
-      };
-    };
-    ipcMain.handle("list-retired-local-models", (_event, inUse) =>
-      require("./retiredLocalModels").listRetiredLocalModels(retiredModelDirs(), inUse)
-    );
-    ipcMain.handle("delete-retired-local-models", (_event, inUse) =>
-      require("./retiredLocalModels").deleteRetiredLocalModels(retiredModelDirs(), inUse)
-    );
-
-    ipcMain.handle("model-delete-all", async () => {
-      try {
-        const modelManager = require("./modelManagerBridge").default;
-        await modelManager.deleteAllModels();
-        return { success: true };
-      } catch (error) {
-        return {
-          success: false,
-          error: error.message,
-          code: error.code,
-          details: error.details,
-        };
-      }
-    });
-
-    ipcMain.handle("model-cancel-download", async (event, modelId) => {
-      try {
-        const modelManager = require("./modelManagerBridge").default;
-        const cancelled = modelManager.cancelDownload(modelId);
-        return { success: cancelled };
-      } catch (error) {
-        return {
-          success: false,
-          error: error.message,
-        };
-      }
-    });
-
-    ipcMain.handle("model-check-runtime", async (event) => {
-      try {
-        const modelManager = require("./modelManagerBridge").default;
-        await modelManager.ensureLlamaCpp();
-        return { available: true };
-      } catch (error) {
-        return {
-          available: false,
-          error: error.message,
-          code: error.code,
-          details: error.details,
-        };
-      }
-    });
-
     handleProviderTranscription(
       "proxy-xai-transcription",
       serializeIpcError(async (event, { audioBuffer, language, keyterms }, signal) => {
@@ -6980,6 +5578,67 @@ class IPCHandlers {
           apiKey: this.environmentManager.getTinfoilKey(),
         });
       })
+    );
+
+    ipcMain.handle(
+      "proxy-self-hosted-transcription",
+      async (
+        _event,
+        { endpoint, headers, redirect, audioBuffer, fileName, mimeType, model, language, prompt } = {}
+      ) => {
+        if (typeof endpoint !== "string" || !/^https?:\/\//i.test(endpoint)) {
+          return {
+            fetchError: {
+              message: "Invalid self-hosted transcription endpoint",
+              name: "TypeError",
+            },
+          };
+        }
+        try {
+          const formData = new FormData();
+          const blob = new Blob([Buffer.from(audioBuffer)], {
+            type: mimeType || "audio/webm",
+          });
+          formData.append("file", blob, fileName || "audio.webm");
+          if (typeof model === "string" && model.trim()) {
+            formData.append("model", model.trim());
+          }
+          if (typeof language === "string" && language.trim()) {
+            formData.append("language", language.trim());
+          }
+          if (typeof prompt === "string" && prompt.trim()) {
+            formData.append("prompt", prompt.trim());
+          }
+
+          const response = await fetch(endpoint, {
+            method: "POST",
+            headers: headers && typeof headers === "object" ? headers : {},
+            body: formData,
+            redirect: redirect === "error" ? "manual" : "follow",
+          });
+          if (response.type === "opaqueredirect") {
+            return { redirected: true };
+          }
+          const bodyText = await response.text();
+          return {
+            ok: response.ok,
+            status: response.status,
+            statusText: response.statusText,
+            contentType: response.headers.get("content-type") || "",
+            headers: Object.fromEntries(response.headers.entries()),
+            bodyText,
+          };
+        } catch (err) {
+          return {
+            fetchError: {
+              message: err?.message || "Fetch failed",
+              name: err?.name || "TypeError",
+              code: err?.code,
+              causeCode: err?.cause?.code,
+            },
+          };
+        }
+      }
     );
 
     // Gemini's Interactions API takes JSON with inline base64 audio, not
@@ -7589,71 +6248,16 @@ class IPCHandlers {
         if (!prefs.useLocalWhisper) speechEngine = "cloud";
       }
 
-      // All windows resend these preferences on LLM route changes. A meeting
-      // can be decoding on either speech server while the dictation route stays put.
-      if (speechEngine !== lastDictationSpeechEngine) {
-        lastDictationSpeechEngine = speechEngine;
-        if (speechEngine === "cloud" || speechEngine === "parakeet") {
-          this.whisperManager.stopServer().catch((err) => {
-            debugLogger.error("Failed to stop whisper-server on dictation switch", {
-              error: err.message,
-            });
-          });
-        }
-        if (speechEngine === "cloud" || speechEngine === "whisper") {
-          this.parakeetManager.stopServer().catch((err) => {
-            debugLogger.error("Failed to stop parakeet-server on dictation switch", {
-              error: err.message,
-            });
-          });
-        }
-      }
-
       // TODO: drop legacy REASONING_PROVIDER / LOCAL_REASONING_MODEL clears once
       // the read fallback is removed (~2 releases after this lands).
       clearVars.push("REASONING_PROVIDER", "LOCAL_REASONING_MODEL");
-
-      // No workspace policy governs this, so it applies before the policy settles.
-      const modelManager = require("./modelManagerBridge").default;
-      modelManager.serverManager.setKeepResident(prefs.keepLocalModelLoaded === true);
 
       // A signed-in window whose workspace policy is still loading reports
       // unclamped modes, so it neither pre-warms nor stops the shared
       // llama-server; signed out, the policy never loads.
       if (prefs.policySettled || !this._hasActiveAccountScope()) {
-        const localServer = resolveLocalServerNeeds(prefs);
-        this.dictationCleanupPrewarm.setModel(localServer.cleanup);
-
-        if (localServer.cleanup) {
-          setVars.CLEANUP_PROVIDER = "local";
-          setVars.LOCAL_CLEANUP_MODEL = localServer.cleanup;
-        } else {
-          clearVars.push("CLEANUP_PROVIDER", "LOCAL_CLEANUP_MODEL");
-        }
-
-        if (localServer.dictationAgent) {
-          setVars.DICTATION_AGENT_PROVIDER = "local";
-          setVars.LOCAL_DICTATION_AGENT_MODEL = localServer.dictationAgent;
-        } else {
-          clearVars.push("DICTATION_AGENT_PROVIDER", "LOCAL_DICTATION_AGENT_MODEL");
-        }
-
-        // Stop the shared llama-server only when no scope still needs the model
-        // it holds, so the active scopes keep their server when another leaves.
-        if (shouldStopLocalServer(localServer, modelManager.currentServerModelId)) {
-          if (modelManager.getServerStatus().running) {
-            debugLogger.debug("Stopping llama-server: no scope needs its model", {
-              loadedModel: modelManager.currentServerModelId,
-              neededModels: localServer.models,
-            });
-          }
-          // A background chat answer may still be streaming from it.
-          modelManager.stopServerWhenIdle().catch((err) => {
-            debugLogger.error("Failed to stop llama-server", { error: err.message });
-          });
-        } else {
-          modelManager.serverManager.cancelDeferredStop();
-        }
+        clearVars.push("CLEANUP_PROVIDER", "LOCAL_CLEANUP_MODEL");
+        clearVars.push("DICTATION_AGENT_PROVIDER", "LOCAL_DICTATION_AGENT_MODEL");
       }
 
       this._syncStartupEnv(setVars, clearVars);
@@ -7686,30 +6290,6 @@ class IPCHandlers {
         };
       } finally {
         signal.removeEventListener("abort", cancel);
-      }
-    });
-
-    ipcMain.handle("cancel-local-reasoning", (event, requestId) => {
-      require("../services/localReasoningBridge").default.cancel(requestId);
-    });
-
-    // After a local refusal, the renderer plans a note's parts against this
-    // number (#2142 part 3). It is the same ceiling runInference sizes against,
-    // so a part the renderer judges to fit is one the main process will accept
-    // without a restart it cannot afford.
-    ipcMain.handle("get-local-context-budget", async (event, modelId) => {
-      try {
-        const modelManager = require("./modelManagerBridge").default;
-        modelManager.ensureInitialized();
-        const modelInfo = modelManager.findModelById(modelId);
-        if (!modelInfo) {
-          return { success: false, error: `Model "${modelId}" not found` };
-        }
-        const modelPath = require("path").join(modelManager.modelsDir, modelInfo.model.fileName);
-        const { ceiling } = await modelManager.contextCeiling(modelInfo, modelPath);
-        return { success: true, maxContextTokens: ceiling, modelName: modelInfo.model.name };
-      } catch (error) {
-        return { success: false, error: error.message };
       }
     });
 
@@ -7835,213 +6415,6 @@ class IPCHandlers {
         }
       }
     );
-
-    ipcMain.handle("check-local-reasoning-available", async () => {
-      try {
-        const LocalReasoningService = require("../services/localReasoningBridge").default;
-        return await LocalReasoningService.isAvailable();
-      } catch (error) {
-        return false;
-      }
-    });
-
-    ipcMain.handle("llama-cpp-check", async () => {
-      try {
-        const llamaCppInstaller = require("./llamaCppInstaller").default;
-        const isInstalled = await llamaCppInstaller.isInstalled();
-        const version = isInstalled ? await llamaCppInstaller.getVersion() : null;
-        return { isInstalled, version };
-      } catch (error) {
-        return { isInstalled: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("llama-cpp-install", async () => {
-      try {
-        const llamaCppInstaller = require("./llamaCppInstaller").default;
-        const result = await llamaCppInstaller.install();
-        return result;
-      } catch (error) {
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("llama-cpp-uninstall", async () => {
-      try {
-        const llamaCppInstaller = require("./llamaCppInstaller").default;
-        const result = await llamaCppInstaller.uninstall();
-        return result;
-      } catch (error) {
-        return { success: false, error: error.message };
-      }
-    });
-
-    // A chat turn cancelled while start() waits out another model's answer must
-    // not swap its model in afterwards.
-    this.llamaServerStartAborts = new Map();
-    ipcMain.handle("llama-server-start", async (event, modelId, requestId) => {
-      const abortController = new AbortController();
-      if (requestId) this.llamaServerStartAborts.set(requestId, abortController);
-      try {
-        const modelManager = require("./modelManagerBridge").default;
-        modelManager.ensureInitialized();
-        const modelInfo = modelManager.findModelById(modelId);
-        if (!modelInfo) {
-          return { success: false, error: `Model "${modelId}" not found` };
-        }
-
-        const modelPath = require("path").join(modelManager.modelsDir, modelInfo.model.fileName);
-
-        await modelManager.serverManager.start(
-          modelPath,
-          await modelManager.serverStartOptions(modelInfo, { signal: abortController.signal })
-        );
-        modelManager.currentServerModelId = modelId;
-
-        return { success: true, port: modelManager.serverManager.port };
-      } catch (error) {
-        return { success: false, error: error.message, code: error.code };
-      } finally {
-        if (requestId) this.llamaServerStartAborts.delete(requestId);
-      }
-    });
-
-    ipcMain.handle("llama-server-cancel-start", (event, requestId) => {
-      this.llamaServerStartAborts.get(requestId)?.abort();
-    });
-
-    ipcMain.handle("llama-server-status", async () => {
-      try {
-        const modelManager = require("./modelManagerBridge").default;
-        return modelManager.getServerStatus();
-      } catch (error) {
-        return { available: false, running: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("llama-gpu-reset", async () => {
-      try {
-        const modelManager = require("./modelManagerBridge").default;
-        const previousModelId = modelManager.currentServerModelId;
-        modelManager.serverManager.resetGpuDetection();
-        await modelManager.stopServer();
-
-        // Restart server with previous model so Vulkan binary is picked up
-        if (previousModelId) {
-          modelManager.prewarmServer(previousModelId).catch(() => {});
-        }
-
-        return { success: true };
-      } catch (error) {
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("detect-vulkan-gpu", async () => {
-      try {
-        const { detectVulkanGpu } = require("../utils/vulkanDetection");
-        return await detectVulkanGpu();
-      } catch (error) {
-        return { available: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("get-computer-profile", () =>
-      require("./computerProfile").readComputerProfile()
-    );
-
-    ipcMain.handle("get-local-setup-space", () => readLocalSetupSpace());
-
-    ipcMain.handle("get-llama-vulkan-status", async () => {
-      try {
-        if (!this._llamaVulkanManager) {
-          const LlamaVulkanManager = require("./llamaVulkanManager");
-          this._llamaVulkanManager = new LlamaVulkanManager();
-        }
-        return this._llamaVulkanManager.getStatus();
-      } catch (error) {
-        return { supported: false, downloaded: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("download-llama-vulkan-binary", async (event) => {
-      try {
-        if (!this._llamaVulkanManager) {
-          const LlamaVulkanManager = require("./llamaVulkanManager");
-          this._llamaVulkanManager = new LlamaVulkanManager();
-        }
-
-        // Stop Vulkan server before downloading to release file locks on DLLs (Windows EBUSY)
-        const modelManager = require("./modelManagerBridge").default;
-        if (modelManager.serverManager.activeBackend === "vulkan") {
-          await modelManager.stopServer().catch((err) => {
-            debugLogger.warn("Failed to stop Vulkan server before download", {
-              error: err.message,
-            });
-          });
-        }
-
-        const result = await this._llamaVulkanManager.download((downloaded, total) => {
-          if (!event.sender.isDestroyed()) {
-            event.sender.send("llama-vulkan-download-progress", {
-              downloaded,
-              total,
-              percentage: total > 0 ? Math.round((downloaded / total) * 100) : 0,
-            });
-          }
-        });
-
-        if (result.success) {
-          process.env.LLAMA_VULKAN_ENABLED = "true";
-          delete process.env.LLAMA_GPU_BACKEND;
-          modelManager.serverManager.cachedServerBinaryPaths = null;
-          await this.environmentManager.saveAllKeysToEnvFile().catch(() => {});
-          // The next inference picks up the new Vulkan binary. The pack can land in
-          // the background after onboarding, so an answer in progress finishes first.
-          modelManager.stopServerWhenIdle({ cancelOnReuse: false }).catch(() => {});
-        }
-
-        return result;
-      } catch (error) {
-        debugLogger.error("Vulkan binary download failed", {
-          error: error.message,
-          stack: error.stack,
-        });
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("cancel-llama-vulkan-download", async () => {
-      if (this._llamaVulkanManager) {
-        return { success: this._llamaVulkanManager.cancelDownload() };
-      }
-      return { success: false };
-    });
-
-    ipcMain.handle("delete-llama-vulkan-binary", async () => {
-      try {
-        if (!this._llamaVulkanManager) {
-          const LlamaVulkanManager = require("./llamaVulkanManager");
-          this._llamaVulkanManager = new LlamaVulkanManager();
-        }
-
-        const modelManager = require("./modelManagerBridge").default;
-        if (modelManager.serverManager.activeBackend === "vulkan") {
-          await modelManager.stopServer();
-        }
-
-        const result = await this._llamaVulkanManager.deleteBinary();
-
-        delete process.env.LLAMA_VULKAN_ENABLED;
-        delete process.env.LLAMA_GPU_BACKEND;
-        modelManager.serverManager.cachedServerBinaryPaths = null;
-        this.environmentManager.saveAllKeysToEnvFile().catch(() => {});
-
-        return result;
-      } catch (error) {
-        return { success: false, error: error.message };
-      }
-    });
 
     ipcMain.handle("get-log-level", async () => {
       return debugLogger.getLevel();
@@ -8745,7 +7118,6 @@ class IPCHandlers {
           this._stopRemoteProductWork();
         else if (snapshot.success || snapshot.policy) {
           this._retireDisallowedProductWork(snapshot);
-          if (snapshot.success) this._startRemoteProductWork();
         }
         broadcastToWindows("effective-policy-changed", snapshot);
       },
@@ -8875,20 +7247,10 @@ class IPCHandlers {
     registerProductHelpIpc({
       ipcMain,
       fetch: proxyFetch,
-      canLookup: createConnectorPolicyResolver({
-        getAuthHeader: createConnectorAuthLookup({
-          hasBearerToken: () => Boolean(tokenStore.get()),
-          windowFor: (event) => BrowserWindow.fromWebContents(event.sender),
-          authHeaderFor: getAuthHeaderFromWindow,
-        }),
-        getPolicy: (options) =>
-          this.effectivePolicyManager.getPolicy({ ...options, accountId: getScope().accountId }),
-        peekPolicy: (options) =>
-          this.effectivePolicyManager.peekPolicy({ ...options, accountId: getScope().accountId }),
-        getAuthGeneration: () => tokenStore.getState().generation,
-        classifySnapshot: (snapshot) => remoteHelpPolicyState(snapshot, app.getVersion()),
-        fallbackOnUnavailable: true,
-      }),
+      canLookup: async () => {
+        const snapshot = this.effectivePolicyManager.getCurrent();
+        return remoteHelpPolicyState(snapshot, app.getVersion());
+      },
       getBasics: async () => ({
         // checkAccess reads the cached permission verdict; it never requests access.
         systemAudioPermission:
@@ -8908,48 +7270,6 @@ class IPCHandlers {
               : "not-granted"
             : "not-applicable",
       }),
-    });
-    if (this.connectorManager) {
-      registerConnectorIpc({
-        ipcMain,
-        manager: this.connectorManager,
-        getPolicyState: createConnectorPolicyResolver({
-          getAuthHeader: createConnectorAuthLookup({
-            hasBearerToken: () => Boolean(tokenStore.get()),
-            windowFor: (event) => BrowserWindow.fromWebContents(event.sender),
-            authHeaderFor: getAuthHeaderFromWindow,
-          }),
-          getPolicy: (options) =>
-            this.effectivePolicyManager.getPolicy({ ...options, accountId: getScope().accountId }),
-          peekPolicy: (options) =>
-            this.effectivePolicyManager.peekPolicy({ ...options, accountId: getScope().accountId }),
-          getAuthGeneration: () => tokenStore.getState().generation,
-        }),
-        // The account bound to the credential in use, the same binding
-        // get-active-account-scope serves (not the separately synced
-        // database scope, which lags a sign-in or account switch).
-        getAccountScope: () =>
-          accountScopeBinding.resolveActiveAccountScope({
-            ...tokenStore.getState(),
-            binding: accountScopeBinding.read(),
-          }),
-        findContacts: (query) =>
-          searchContacts(this.databaseManager.getContactLookupSources(), query),
-        noteAttendees: createNoteAttendeesLookup({
-          getContactLookupSources: () => this.databaseManager.getContactLookupSources(),
-          getCalendarEventById: (id) => this.databaseManager.getCalendarEventById(id),
-          getSpeakerMappings: (noteId) => this.databaseManager.getSpeakerMappings(noteId),
-          getSpeakerProfiles: () => this.databaseManager.getSpeakerProfiles(),
-          getGmailAddress: async () =>
-            (await this.connectorManager.connectorStatus("gmail"))?.accountLabel ?? null,
-        }),
-      });
-    }
-    registerSkillsIpc({
-      ipcMain,
-      library: this.skillLibrary,
-      shell,
-      broadcast: broadcastToWindows,
     });
     const { createEnterpriseAudioCredentials } = require("./enterpriseAudioCredentials");
     const {
@@ -11156,6 +9476,9 @@ class IPCHandlers {
     let meetingLocalProvider = null;
     let meetingLocalModel = null;
     let meetingLocalLanguage = null;
+    let meetingRemoteUrl = "";
+    let meetingRemoteModel = "";
+    let meetingSelfHostedHeaders = [];
     // The pass that is transcribing buffered audio, if any. Stop and rollback
     // await it: a pass that finished after the reset would push its finals into
     // the next session and send them to no window.
@@ -11448,10 +9771,7 @@ class IPCHandlers {
     const startLiveSpeakerIdentification = async (win, systemAudioMode) => {
       await stopLiveSpeakerIdentification();
 
-      if (
-        !supportsLiveSpeakerIdentification(systemAudioMode) ||
-        !liveSpeakerIdentifier.isAvailable()
-      ) {
+      if (!liveSpeakerIdentifier?.isAvailable?.()) {
         return false;
       }
 
@@ -11591,7 +9911,36 @@ class IPCHandlers {
 
       const wav = pcm16ToWav(pcm16k);
 
-      const transcribeChunk = () => {
+      const transcribeChunk = async () => {
+        if (meetingConnectionOptions?.provider === "self-hosted") {
+          const baseUrl = String(meetingRemoteUrl || "").trim().replace(/\/+$/, "");
+          if (!baseUrl) {
+            return { success: false, text: "" };
+          }
+          const endpoint = baseUrl.endsWith("/audio/transcriptions")
+            ? baseUrl
+            : `${baseUrl}/audio/transcriptions`;
+          const formData = new FormData();
+          formData.append("file", new Blob([wav], { type: "audio/wav" }), "meeting.wav");
+          if (meetingRemoteModel) {
+            formData.append("model", meetingRemoteModel);
+          }
+          if (meetingLocalLanguage && meetingLocalLanguage !== "auto") {
+            formData.append("language", meetingLocalLanguage);
+          }
+          const { headers } = selfHostedSttRequest(meetingSelfHostedHeaders, {});
+          const response = await fetch(endpoint, {
+            method: "POST",
+            headers,
+            body: formData,
+          });
+          if (!response.ok) {
+            const errText = await response.text().catch(() => "");
+            throw new Error(`Self-hosted STT error (${response.status}): ${errText || response.statusText}`);
+          }
+          const data = await response.json();
+          return { success: true, text: typeof data?.text === "string" ? data.text : "" };
+        }
         if (isSherpaLocalProvider(meetingLocalProvider)) {
           return this.parakeetManager.transcribeLocalParakeet(wav, {
             model: meetingLocalModel,
@@ -12339,7 +10688,7 @@ class IPCHandlers {
         return { success: false, error: `Unsupported provider: ${options.provider}` };
       }
 
-      if (options.provider === "local") {
+      if (options.provider === "local" || options.provider === "self-hosted") {
         return { success: true };
       }
 
@@ -12521,15 +10870,20 @@ class IPCHandlers {
           });
         }
 
-        if (options.provider === "local") {
+        if (options.provider === "local" || options.provider === "self-hosted") {
           await disconnectMeetingStreaming();
           // The reset clears the options and window this start already chose.
           meetingConnectionOptions = options;
           meetingConnectionWin = BrowserWindow.fromWebContents(event.sender);
           meetingLocalMode = true;
-          meetingLocalProvider = options.localProvider || "whisper";
+          meetingLocalProvider = options.localProvider || options.provider;
           meetingLocalModel = options.localModel || null;
           meetingLocalLanguage = options.language || null;
+          meetingRemoteUrl = options.remoteUrl || "";
+          meetingRemoteModel = options.model || "";
+          meetingSelfHostedHeaders = Array.isArray(options.selfHostedHeaders)
+            ? options.selfHostedHeaders
+            : [];
           meetingLocalWin = BrowserWindow.fromWebContents(event.sender);
           meetingLocalBuffers = { mic: [], system: [] };
           meetingLocalTranscript = "";
@@ -15813,234 +14167,6 @@ class IPCHandlers {
       return this.environmentManager.getTranslationKey?.() || "";
     });
 
-    // Provider-neutral availability over the shared calendar cache.
-    ipcMain.handle("calendar-get-availability", async (_event, request) => {
-      try {
-        return {
-          success: true,
-          availability: getCalendarAvailability({
-            request,
-            databaseManager: this.databaseManager,
-            calendarProviders: [
-              { provider: "google", manager: this.googleCalendarManager },
-              { provider: "microsoft", manager: this.microsoftCalendarManager },
-              { provider: "apple", manager: this.appleCalendarManager },
-            ],
-          }),
-        };
-      } catch (error) {
-        debugLogger.warn(
-          "Calendar availability request failed",
-          { error: error instanceof Error ? error.message : String(error) },
-          "calendar"
-        );
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : "Failed to check calendar availability",
-        };
-      }
-    });
-
-    const authorizeCalendar = async (event, requestId, authorize) => {
-      requestId = requestId || crypto.randomUUID();
-      const requests = this._calendarAuthorizationRequests;
-      const controller = requests.begin(event.sender.id, requestId);
-      const abort = () => controller.abort();
-      const policySignal = this._productRequestContext.getStore()?.signal;
-      policySignal?.addEventListener("abort", abort, { once: true });
-      if (policySignal?.aborted) abort();
-      event.sender.once("destroyed", abort);
-      try {
-        // A cancel after the account was saved doesn't undo it, so report what happened.
-        return await authorize(controller.signal);
-      } catch (error) {
-        if (controller.signal.aborted)
-          return { success: false, error: "oauth_cancelled", reason: "cancelled" };
-        debugLogger.error("Calendar authorization failed", { error: error.message }, "calendar");
-        return { success: false, error: error.message };
-      } finally {
-        event.sender.removeListener("destroyed", abort);
-        policySignal?.removeEventListener("abort", abort);
-        requests.complete(event.sender.id, requestId, controller);
-      }
-    };
-    ipcMain.handle("calendar-cancel-connect", (event, requestId) =>
-      this._calendarAuthorizationRequests.cancel(event.sender.id, requestId)
-    );
-
-    // Google Calendar
-    handleRemoteProduct("gcal-start-oauth", (event, requestId) =>
-      authorizeCalendar(event, requestId, (signal) =>
-        this.googleCalendarManager.startOAuth({ signal })
-      )
-    );
-
-    ipcMain.handle("gcal-disconnect", async (_event, email) => {
-      try {
-        this.googleCalendarManager.disconnect(email);
-        return { success: true };
-      } catch (error) {
-        debugLogger.error(
-          "Google Calendar disconnect failed",
-          { error: error.message },
-          "calendar"
-        );
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("gcal-get-connection-status", async () => {
-      try {
-        return this.googleCalendarManager.getConnectionStatus();
-      } catch (error) {
-        return { connected: false, email: null };
-      }
-    });
-
-    ipcMain.handle("gcal-get-calendars", async () => {
-      try {
-        return { success: true, calendars: this.googleCalendarManager.getCalendars() };
-      } catch (error) {
-        return { success: false, calendars: [] };
-      }
-    });
-
-    handleRemoteProduct("gcal-set-calendar-selection", async (_event, calendarId, isSelected) => {
-      try {
-        await this.googleCalendarManager.setCalendarSelection(calendarId, isSelected);
-        return { success: true };
-      } catch (error) {
-        return { success: false, error: error.message };
-      }
-    });
-
-    handleRemoteProduct("gcal-set-primary-only", async (_event, value) => {
-      try {
-        await this.googleCalendarManager.setPrimaryOnly(value);
-        return { success: true };
-      } catch (error) {
-        return { success: false, error: error.message };
-      }
-    });
-
-    handleRemoteProduct("gcal-sync-events", async () => {
-      try {
-        await this.googleCalendarManager.syncEvents();
-        return { success: true };
-      } catch (error) {
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("gcal-get-upcoming-events", async (_event, windowMinutes, options) => {
-      try {
-        return {
-          success: true,
-          events: await this.googleCalendarManager.getUpcomingEvents(windowMinutes, {
-            includeAllDay: options?.includeAllDay === true,
-          }),
-        };
-      } catch (error) {
-        return { success: false, events: [] };
-      }
-    });
-
-    ipcMain.handle("gcal-get-event", async (_event, eventId) => {
-      try {
-        const event = this.databaseManager.getCalendarEventById(eventId);
-        return { success: true, event };
-      } catch (error) {
-        return { success: false, event: null };
-      }
-    });
-
-    ipcMain.handle("calendar-get-linkable-events", async () => {
-      try {
-        // A day past the synced history: an all-day row's plain-date end reads
-        // as UTC midnight, up to 14 hours off the user's local end.
-        const endsAfter = new Date(
-          Date.now() - CALENDAR_LOOKBACK_MS - 24 * 60 * 60 * 1000
-        ).toISOString();
-        return {
-          success: true,
-          events: this.databaseManager.getLinkableCalendarEvents({ endsAfter }),
-        };
-      } catch (error) {
-        debugLogger.debug("Linkable calendar events failed", { error: error.message }, "calendar");
-        return { success: false, events: [] };
-      }
-    });
-
-    // Microsoft Calendar
-    handleRemoteProduct("mcal-start-oauth", (event, requestId) =>
-      authorizeCalendar(event, requestId, (signal) =>
-        this.microsoftCalendarManager.startOAuth({ signal })
-      )
-    );
-
-    ipcMain.handle("mcal-disconnect", async (_event, email) => {
-      try {
-        this.microsoftCalendarManager.disconnect(email);
-        return { success: true };
-      } catch (error) {
-        debugLogger.error(
-          "Microsoft Calendar disconnect failed",
-          { error: error.message },
-          "calendar"
-        );
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("mcal-get-connection-status", async () => {
-      try {
-        return this.microsoftCalendarManager.getConnectionStatus();
-      } catch (error) {
-        debugLogger.error(
-          "Microsoft Calendar connection status failed",
-          { error: error.message },
-          "calendar"
-        );
-        return { connected: false, accounts: [] };
-      }
-    });
-
-    handleRemoteProduct("mcal-set-primary-only", async (_event, value) => {
-      try {
-        await this.microsoftCalendarManager.setPrimaryOnly(value);
-        return { success: true };
-      } catch (error) {
-        return { success: false, error: error.message };
-      }
-    });
-
-    // Apple Calendar (macOS EventKit)
-    ipcMain.handle("acal-connect", (event, requestId) =>
-      authorizeCalendar(event, requestId, (signal) => this.appleCalendarManager.connect({ signal }))
-    );
-
-    ipcMain.handle("acal-disconnect", async () => {
-      try {
-        return this.appleCalendarManager.disconnect();
-      } catch (error) {
-        debugLogger.error("Apple Calendar disconnect failed", { error: error.message }, "acal");
-        return { success: false, error: error.message };
-      }
-    });
-
-    ipcMain.handle("acal-get-connection-status", async () => {
-      try {
-        return this.appleCalendarManager.getConnectionStatus();
-      } catch (error) {
-        debugLogger.error(
-          "Apple Calendar connection status failed",
-          { error: error.message },
-          "acal"
-        );
-        return { connected: false, sourceNames: [] };
-      }
-    });
-
     ipcMain.handle("search-contacts", async (_event, query) => {
       try {
         const contacts = this.databaseManager.searchContacts(query);
@@ -16050,24 +14176,21 @@ class IPCHandlers {
       }
     });
 
-    // Limited to connected calendars and contact sources, like find_contact, with the addresses
-    // the invite dialog can't use left out before the limit so they don't crowd out the rest.
     ipcMain.handle("search-invite-contacts", async (_event, query, exclude) => {
       try {
         const excluded = new Set(
           (Array.isArray(exclude) ? exclude : []).map((email) => String(email).toLowerCase())
         );
-        const { contacts } = searchContacts(
-          this.databaseManager.getContactLookupSources(),
-          String(query ?? ""),
-          { limit: excluded.size + INVITE_SUGGESTION_LIMIT }
-        );
+        const contacts = this.databaseManager.searchContacts(String(query ?? ""));
         return {
           success: true,
           contacts: contacts
-            .filter((contact) => !excluded.has(contact.email.toLowerCase()))
+            .filter((contact) => !excluded.has(String(contact.email ?? "").toLowerCase()))
             .slice(0, INVITE_SUGGESTION_LIMIT)
-            .map(({ email, name }) => ({ email, name })),
+            .map(({ email, display_name, name }) => ({
+              email,
+              name: name ?? display_name ?? null,
+            })),
         };
       } catch {
         return { success: false, contacts: [] };
@@ -16422,157 +14545,6 @@ class IPCHandlers {
       } catch (error) {
         debugLogger.error("Failed to pick folder", { error: error.message }, "note-files");
         return { canceled: true };
-      }
-    });
-
-    ipcMain.handle("granola-import-pick-and-preview", async (event) => {
-      try {
-        const { dialog } = require("electron");
-        // Parent the dialog so it opens as a sheet on the settings window —
-        // a parentless panel can land invisible on another display/Space.
-        const parentWindow = BrowserWindow.fromWebContents(event.sender);
-        // Granola chunks large exports into numbered files (…-000.csv, -001, …),
-        // so let the user grab the whole set in one pick.
-        const dialogOptions = {
-          properties: ["openFile", "multiSelections"],
-          filters: [{ name: "CSV", extensions: ["csv"] }],
-        };
-        const result = parentWindow
-          ? await dialog.showOpenDialog(parentWindow, dialogOptions)
-          : await dialog.showOpenDialog(dialogOptions);
-        if (result.canceled || !result.filePaths.length) {
-          return { canceled: true };
-        }
-        const filePaths = [...result.filePaths].sort();
-        const MAX_IMPORT_BYTES = 200 * 1024 * 1024;
-        const { createGranolaNoteKeyAllocator, parseGranolaCsv } =
-          await import("./granolaImport.js");
-        const allocateNoteKey = createGranolaNoteKeyAllocator();
-        const notes = [];
-        const seenIds = new Set();
-        let rowIssueCount = 0;
-        for (const filePath of filePaths) {
-          if (fs.statSync(filePath).size > MAX_IMPORT_BYTES) {
-            return { canceled: false, success: false, error: "FILE_TOO_LARGE" };
-          }
-          const parsed = parseGranolaCsv(fs.readFileSync(filePath, "utf8"), {
-            allocateNoteKey,
-          });
-          if (!parsed.ok) {
-            return { canceled: false, success: false, error: parsed.error.code };
-          }
-          // File-level warnings (e.g. ignored columns) are expected on every
-          // real export; only row-scoped problems belong in the issue count.
-          rowIssueCount += parsed.warnings.filter((warning) => warning.row != null).length;
-          for (const note of parsed.notes) {
-            if (!seenIds.has(note.clientNoteId)) {
-              seenIds.add(note.clientNoteId);
-              notes.push(note);
-            }
-          }
-        }
-        const existing = new Set(this.databaseManager.getImportedClientNoteIds(notes));
-        const freshNotes = notes.filter((n) => !existing.has(n.clientNoteId));
-        // The run handler only ever imports what this preview parsed — the
-        // renderer never sends a file path across the bridge.
-        this._granolaImportPending = { notes };
-        return {
-          canceled: false,
-          success: true,
-          fileName: filePaths.map((p) => path.basename(p)).join(", "),
-          total: notes.length,
-          newCount: freshNotes.length,
-          duplicateCount: notes.length - freshNotes.length,
-          sampleTitles: freshNotes.slice(0, 5).map((n) => n.title),
-          rowIssueCount,
-        };
-      } catch (error) {
-        debugLogger.error(
-          "Granola import preview failed",
-          { error: error.message },
-          "granola-import"
-        );
-        return { canceled: false, success: false, error: "READ_FAILED" };
-      }
-    });
-
-    ipcMain.handle("granola-import-run", async () => {
-      const pending = this._granolaImportPending;
-      this._granolaImportPending = null;
-      if (!pending) return { success: false, error: "NO_PENDING_IMPORT" };
-      try {
-        const result = this.databaseManager.importNotes(pending.notes);
-        if (result.imported > 0) {
-          // One-shot side effects: a single index wake-up (the SQLite triggers
-          // already journaled every imported note) and a single mirror rebuild —
-          // never per-note work (sync storm / O(notes × files) mirror scans).
-          setImmediate(() => {
-            try {
-              this.notifyVectorChanges();
-              if (this.noteFiles.enabled) {
-                this.noteFiles.rebuild().catch((error) => {
-                  debugLogger.error(
-                    "Note file rebuild failed after Granola import",
-                    { error: error.message },
-                    "granola-import"
-                  );
-                });
-              }
-            } catch (sideEffectError) {
-              debugLogger.error(
-                "Granola import side effects failed",
-                { error: sideEffectError.message },
-                "granola-import"
-              );
-            }
-          });
-        }
-        return {
-          success: true,
-          imported: result.imported,
-          skipped: result.skipped,
-          errors: result.errors,
-        };
-      } catch (error) {
-        debugLogger.error("Granola import failed", { error: error.message }, "granola-import");
-        return { success: false, error: "IMPORT_FAILED" };
-      }
-    });
-
-    ipcMain.handle("dragon-import-pick-file", async (event) => {
-      try {
-        const { dialog } = require("electron");
-        // Parent the dialog so it opens as a sheet on the panel window —
-        // a parentless panel can land invisible on another display/Space.
-        const parentWindow = BrowserWindow.fromWebContents(event.sender);
-        const dialogOptions = {
-          properties: ["openFile"],
-          filters: [{ name: "Dragon word list", extensions: ["txt", "xml"] }],
-        };
-        const result = parentWindow
-          ? await dialog.showOpenDialog(parentWindow, dialogOptions)
-          : await dialog.showOpenDialog(dialogOptions);
-        if (result.canceled || !result.filePaths.length) {
-          return { canceled: true };
-        }
-        const [filePath] = result.filePaths;
-        // A twenty-year Dragon vocabulary is well under 1 MB; anything near
-        // this bound is not a word list.
-        const MAX_IMPORT_BYTES = 10 * 1024 * 1024;
-        if (fs.statSync(filePath).size > MAX_IMPORT_BYTES) {
-          return { canceled: false, success: false, error: "FILE_TOO_LARGE" };
-        }
-        // The renderer parses the bytes and applies the words, so a large or
-        // malformed file never holds up hotkeys and dictation here.
-        return {
-          canceled: false,
-          success: true,
-          fileName: path.basename(filePath),
-          bytes: fs.readFileSync(filePath),
-        };
-      } catch (error) {
-        debugLogger.error("Dragon import failed", { error: error.message }, "dragon-import");
-        return { canceled: false, success: false, error: "READ_FAILED" };
       }
     });
 

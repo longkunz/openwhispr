@@ -24,7 +24,6 @@ import {
 import { streamText, stepCountIs, type LanguageModel } from "ai";
 import { compactTranscriptHistory } from "./ai/transcriptHistory";
 import { getAIModel } from "./ai/providers";
-import { localServerFetch, startLocalServer } from "./ai/localServerFetch";
 import { createEnterpriseChatModel } from "./ai/enterpriseChatModel";
 import {
   getManagedScopeResolution,
@@ -237,16 +236,11 @@ async function resolveStreamSetup<T>(pending: Promise<T>, assertAllowed: () => v
 
 // Null when the turn was cancelled while main waited out another model's answer.
 async function startLocalStreamServer(
-  model: string,
-  abortController: AbortController,
-  assertAllowed: () => void
+  _model: string,
+  _abortController: AbortController,
+  _assertAllowed: () => void
 ): Promise<number | null> {
-  try {
-    return await resolveStreamSetup(startLocalServer(model, abortController.signal), assertAllowed);
-  } catch (error) {
-    if (abortController.signal.aborted && (error as Error).name === "AbortError") return null;
-    throw error;
-  }
+  throw new Error("Local AI is not available in this build.");
 }
 
 function logParamFallback(logEvent: string) {
@@ -1194,7 +1188,6 @@ class ReasoningService extends BaseReasoningService {
                 requiresAgent: true,
                 disableThinking: openrouterDisableThinking,
                 reasoningEffort: provider === "openrouter" ? reasoningEffort : undefined,
-                ...(isLocalProvider ? { fetch: localServerFetch(model) } : {}),
               }),
               assertStreamAllowed
             );

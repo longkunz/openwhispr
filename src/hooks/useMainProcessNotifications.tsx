@@ -65,31 +65,7 @@ export function useMainProcessNotifications({
     const unsubscribeGpuFallback =
       window.electronAPI?.onGpuFallbackNotification?.(showGpuFallbackToast);
 
-    const unsubscribeCorrections = window.electronAPI?.onCorrectionsLearned?.((words) => {
-      if (words && words.length > 0) {
-        const wordList = words.map((w) => `“${w}”`).join(", ");
-        let toastId: string;
-        toastId = toast({
-          title: t("app.toasts.addedToDict", { words: wordList }),
-          variant: "success",
-          duration: 6000,
-          actions: [
-            {
-              label: t("app.toasts.undo"),
-              dismissOnClick: false,
-              onClick: async () => {
-                try {
-                  const result = await window.electronAPI?.undoLearnedCorrections?.(words);
-                  if (result?.success) dismiss(toastId);
-                } catch {
-                  // silently fail — word stays in dictionary
-                }
-              },
-            },
-          ],
-        });
-      }
-    });
+    const unsubscribeCorrections: (() => void) | undefined = undefined;
 
     return () => {
       unsubscribeFallback?.();

@@ -3,7 +3,6 @@ import { EnterpriseAudioSettings } from "./settings/EnterpriseAudioSettings";
 import { useRegistryVersion } from "../hooks/useRegistryVersion";
 import React, { useState, useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { LocalOffInstalledModels } from "./settings/LocalOffInstalledModels";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { BIDI_VALUE_TOKEN, BidiInterpolatedText } from "./ui/BidiInterpolatedText";
@@ -73,14 +72,10 @@ import { useSignOut } from "../hooks/useSignOut";
 import { useInsightsSyncOptIn } from "../hooks/useInsightsSyncOptIn";
 import { useLeaderboardParticipation } from "../hooks/useLeaderboardParticipation";
 import { clearInsightsCache } from "../lib/insightsCache";
-import { useWhisper } from "../hooks/useWhisper";
 import { usePermissions } from "../hooks/usePermissions";
 import { useSystemAudioPermission } from "../hooks/useSystemAudioPermission";
 import { useClipboard } from "../hooks/useClipboard";
-import { useUpdater } from "../hooks/useUpdater";
-import { updatePolicyMessageKey } from "../utils/updatePolicyMessage";
 
-import PromptStudio from "./ui/PromptStudio";
 import { ProviderTabs } from "./ui/ProviderTabs";
 import { HotkeyListInput } from "./ui/HotkeyListInput";
 import { useHotkeyRegistration } from "../hooks/useHotkeyRegistration";
@@ -98,10 +93,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import LinuxPttSetupInfo from "./ui/LinuxPttSetupInfo";
 import { Toggle } from "./ui/toggle";
 import DeveloperSection from "./DeveloperSection";
-import ChatAgentSettings from "./settings/ChatAgentSettings";
-import DictationAgentSettings from "./settings/DictationAgentSettings";
-import DictationTranslationSettings from "./settings/DictationTranslationSettings";
-import DictationCleanupSettings from "./settings/DictationCleanupSettings";
 import InferenceConfigEditor from "./settings/InferenceConfigEditor";
 import { MeetingTranscriptionPanel } from "./settings/MeetingSettings";
 import { UploadTranscriptionPanel } from "./settings/UploadSettings";
@@ -137,10 +128,7 @@ import {
 } from "../stores/noteStore.js";
 import { syncService } from "../services/SyncService.js";
 import { formatBytes } from "../utils/formatBytes";
-import { discardPendingLocalSetup } from "./onboarding/pendingLocalModels";
 import {
-  clearMissingLocalModelSelections,
-  selectedLocalSpeechModelIds,
   TRANSCRIPTION_ENTERPRISE_POLICY_PROVIDER_IDS,
   TRANSCRIPTION_POLICY_PROVIDER_IDS,
   useSettingsStore,
@@ -191,8 +179,6 @@ import {
 import { PlansBillingPicker } from "./settings/billing/PlansBillingPicker";
 import { WorkspaceBillingView } from "./settings/billing/WorkspaceBillingView";
 import CreateWorkspaceDialog from "./CreateWorkspaceDialog";
-import ProfileSection from "./settings/ProfileSection";
-import ToneStyleSection from "./settings/ToneStyleSection";
 import { formatAmount } from "../utils/formatAmount";
 import { enterpriseProviderName, getTranscriptionProvider } from "../models/ModelRegistry";
 import { useManagedScopeResolution } from "../stores/enterpriseIdentityStore";
@@ -251,243 +237,6 @@ function SectionHeader({
         <p className="text-xs text-muted-foreground/80 mt-0.5 leading-relaxed">{description}</p>
       )}
       {note && <p className="text-xs text-muted-foreground/80 mt-0.5 leading-relaxed">{note}</p>}
-    </div>
-  );
-}
-
-interface GranolaImportPreview {
-  total: number;
-  newCount: number;
-  duplicateCount: number;
-  sampleTitles: string[];
-  warningCount: number;
-}
-
-type GranolaImportState =
-  | { phase: "idle" }
-  | { phase: "picking" }
-  | { phase: "preview"; preview: GranolaImportPreview }
-  | { phase: "importing"; preview: GranolaImportPreview }
-  | { phase: "done"; imported: number; skipped: number };
-
-function GranolaImportSection({
-  showAlertDialog,
-}: {
-  showAlertDialog: (options: { title: string; description?: string }) => void;
-}) {
-  const { t } = useTranslation();
-  const [state, setState] = useState<GranolaImportState>({ phase: "idle" });
-  // Guards double-clicks: handlers read stale closure state, so state alone
-  // can't prevent a second dialog/run being started in the same frame.
-  const requestInFlightRef = useRef(false);
-
-  const errorDescription = (code?: string) => {
-    switch (code) {
-      case "EMPTY_FILE":
-        return t("settings.granolaImport.error.EMPTY_FILE");
-      case "HEADERS_UNRECOGNIZED":
-        return t("settings.granolaImport.error.HEADERS_UNRECOGNIZED");
-      case "NO_DATA_ROWS":
-        return t("settings.granolaImport.error.NO_DATA_ROWS");
-      case "FILE_TOO_LARGE":
-        return t("settings.granolaImport.error.FILE_TOO_LARGE");
-      default:
-        return t("settings.granolaImport.error.generic");
-    }
-  };
-
-  const showImportError = (code?: string) => {
-    showAlertDialog({
-      title: t("settings.granolaImport.error.title"),
-      description: errorDescription(code),
-    });
-  };
-
-  const handleChooseFile = async () => {
-    if (requestInFlightRef.current) return;
-    requestInFlightRef.current = true;
-    setState({ phase: "picking" });
-    try {
-      let result:
-        | Awaited<ReturnType<NonNullable<typeof window.electronAPI.granolaImportPickAndPreview>>>
-        | undefined;
-      try {
-        result = await window.electronAPI?.granolaImportPickAndPreview?.();
-      } catch {
-        setState({ phase: "idle" });
-        showImportError();
-        return;
-      }
-      if (!result || result.canceled) {
-        setState({ phase: "idle" });
-        return;
-      }
-      if (!result.success) {
-        setState({ phase: "idle" });
-        showImportError(result.error);
-        return;
-      }
-      setState({
-        phase: "preview",
-        preview: {
-          total: result.total ?? 0,
-          newCount: result.newCount ?? 0,
-          duplicateCount: result.duplicateCount ?? 0,
-          sampleTitles: result.sampleTitles ?? [],
-          warningCount: result.rowIssueCount ?? 0,
-        },
-      });
-    } finally {
-      requestInFlightRef.current = false;
-    }
-  };
-
-  const handleConfirm = async () => {
-    if (state.phase !== "preview" || requestInFlightRef.current) return;
-    requestInFlightRef.current = true;
-    setState({ phase: "importing", preview: state.preview });
-    try {
-      let result:
-        Awaited<ReturnType<NonNullable<typeof window.electronAPI.granolaImportRun>>> | undefined;
-      try {
-        result = await window.electronAPI?.granolaImportRun?.();
-      } catch {
-        result = undefined;
-      }
-      if (!result?.success) {
-        setState({ phase: "idle" });
-        showImportError(result?.error);
-        return;
-      }
-      const imported = result.imported ?? 0;
-      setState({ phase: "done", imported, skipped: result.skipped ?? 0 });
-      if (imported > 0) {
-        // One refresh + one batched sync pass — never per-note pushes.
-        void loadFolders();
-        void initializeNotesTree();
-        void syncService.requestSyncAll("manual");
-      }
-    } finally {
-      requestInFlightRef.current = false;
-    }
-  };
-
-  const dialogOpen =
-    state.phase === "preview" || state.phase === "importing" || state.phase === "done";
-  const preview = state.phase === "preview" || state.phase === "importing" ? state.preview : null;
-
-  return (
-    <div>
-      <SectionHeader
-        title={t("settings.granolaImport.title")}
-        description={t("settings.granolaImport.howTo")}
-      />
-      <SettingsPanel>
-        <SettingsPanelRow>
-          <SettingsRow
-            label={t("settings.granolaImport.title")}
-            description={t("settings.granolaImport.description")}
-          >
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              disabled={state.phase === "picking"}
-              onClick={handleChooseFile}
-            >
-              {state.phase === "picking" ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                t("settings.granolaImport.chooseFile")
-              )}
-            </Button>
-          </SettingsRow>
-        </SettingsPanelRow>
-      </SettingsPanel>
-
-      <Dialog
-        open={dialogOpen}
-        onOpenChange={(open) => {
-          if (!open && state.phase !== "importing") setState({ phase: "idle" });
-        }}
-      >
-        <DialogContent className="sm:max-w-90">
-          <DialogHeader>
-            <DialogTitle>
-              {state.phase === "done"
-                ? t("settings.granolaImport.done.title")
-                : t("settings.granolaImport.preview.title")}
-            </DialogTitle>
-            {state.phase === "done" ? (
-              <DialogDescription>
-                {t("settings.granolaImport.done.summary", {
-                  imported: state.imported,
-                  skipped: state.skipped,
-                })}
-              </DialogDescription>
-            ) : (
-              preview && (
-                <DialogDescription>
-                  {preview.newCount === 0
-                    ? t("settings.granolaImport.preview.nothingNew")
-                    : t("settings.granolaImport.preview.summary", {
-                        total: preview.total,
-                        newCount: preview.newCount,
-                        duplicateCount: preview.duplicateCount,
-                      })}
-                </DialogDescription>
-              )
-            )}
-          </DialogHeader>
-          {preview && (
-            <div className="space-y-2">
-              {preview.sampleTitles.length > 0 && (
-                <ul className="text-xs text-muted-foreground space-y-1">
-                  {preview.sampleTitles.map((title, index) => (
-                    <li key={`${index}-${title}`} className="truncate">
-                      {title}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {preview.warningCount > 0 && (
-                <p className="text-xs text-muted-foreground/80">
-                  {t("settings.granolaImport.preview.warnings", {
-                    warningCount: preview.warningCount,
-                  })}
-                </p>
-              )}
-            </div>
-          )}
-          <DialogFooter>
-            {state.phase === "done" ? (
-              <Button size="sm" onClick={() => setState({ phase: "idle" })}>
-                {t("common.close")}
-              </Button>
-            ) : (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={state.phase === "importing"}
-                  onClick={() => setState({ phase: "idle" })}
-                >
-                  {t("common.cancel")}
-                </Button>
-                <Button size="sm" disabled={state.phase === "importing"} onClick={handleConfirm}>
-                  {state.phase === "importing" ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    t("settings.granolaImport.preview.confirm", {
-                      newCount: preview?.newCount ?? 0,
-                    })
-                  )}
-                </Button>
-              </>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -570,116 +319,23 @@ function TranscriptionSection({
   );
   const selfHostedHeaders = useSettingsStore((s) => s.selfHostedSttHeaders.dictation);
   const setSelfHostedSttHeaders = useSettingsStore((s) => s.setSelfHostedSttHeaders);
-  const managed = useManagedScopeResolution("transcription", enterpriseTranscriptionSetupMode);
-  const managedAvailable = useManagedScopeResolution("transcription", "managed");
-  const {
-    modes: transcriptionModes,
-    effectiveMode: effectiveTranscriptionMode,
-    isModeAllowed,
-  } = usePolicyModeOptions<InferenceModeOption>(
-    [
-      {
-        id: "openwhispr",
-        label: t("settingsPage.transcription.modes.openwhispr"),
-        description: t("settingsPage.transcription.modes.openwhisprDesc"),
-        icon: <Cloud className="w-4 h-4" />,
-        disabled: !isSignedIn,
-        signInRequired: !isSignedIn,
-      },
-      {
-        id: "providers",
-        label: t("settingsPage.transcription.modes.providers"),
-        description: t("settingsPage.transcription.modes.providersDesc"),
-        icon: <Key className="w-4 h-4" />,
-      },
-      {
-        id: "local",
-        label: t("settingsPage.transcription.modes.local"),
-        description: t("settingsPage.transcription.modes.localDesc"),
-        icon: <Cpu className="w-4 h-4" />,
-      },
-      {
-        id: "self-hosted",
-        label: t("settingsPage.transcription.modes.selfHosted"),
-        description: t("settingsPage.transcription.modes.selfHostedDesc"),
-        icon: <Network className="w-4 h-4" />,
-      },
-      ...(isEnterpriseTranscriptionOfferable(policySnapshot)
-        ? [
-            {
-              id: "enterprise" as const,
-              label: t("settingsPage.transcription.modes.enterprise"),
-              description: t("settingsPage.transcription.modes.enterpriseDesc"),
-              icon: <ShieldCheck className="w-4 h-4" />,
-            },
-          ]
-        : []),
-    ],
-    "transcription",
+
+  useEffect(() => {
+    if (transcriptionMode !== "self-hosted") {
+      setTranscriptionMode("self-hosted");
+      setUseLocalWhisper(false);
+      updateTranscriptionSettings({ useLocalWhisper: false });
+      setCloudTranscriptionMode("byok");
+    }
+  }, [
     transcriptionMode,
-    {
-      byokProviders: TRANSCRIPTION_POLICY_PROVIDER_IDS,
-      enterpriseProviders: TRANSCRIPTION_ENTERPRISE_POLICY_PROVIDER_IDS,
-    }
-  );
-  const handleTranscriptionModeSelect = (mode: InferenceMode) => {
-    if (!isModeAllowed(mode)) return;
-    if (mode === "openwhispr" && !isSignedIn) {
-      requestSignIn();
-      return;
-    }
-    // Only the explicit enterprise controls change the shared setup mode. Managed setup
-    // outranks the personal mode, which stays as the user left it so "Use personal
-    // setup" returns to it.
-    if (mode === "enterprise") {
-      if (enterpriseTranscriptionSetupMode === "managed") return;
-      setEnterpriseTranscriptionSetupMode("managed");
-    } else {
-      if (mode === effectiveTranscriptionMode) return;
-      setTranscriptionMode(mode);
-      setUseLocalWhisper(mode === "local");
-      updateTranscriptionSettings({ useLocalWhisper: mode === "local" });
-      setCloudTranscriptionMode(mode === "openwhispr" ? "openwhispr" : "byok");
-    }
+    setTranscriptionMode,
+    setUseLocalWhisper,
+    updateTranscriptionSettings,
+    setCloudTranscriptionMode,
+  ]);
 
-    const toastKey = {
-      openwhispr: "switchedCloud",
-      providers: "switchedProviders",
-      local: "switchedLocal",
-      "self-hosted": "switchedSelfHosted",
-      enterprise: "switchedEnterprise",
-    }[mode];
-    toast({
-      title: t(`settingsPage.transcription.toasts.${toastKey}.title`),
-      description: t(`settingsPage.transcription.toasts.${toastKey}.description`),
-      variant: "success",
-      duration: 3000,
-    });
-  };
-
-  const handleLocalModelSelect = useCallback(
-    (modelId: string, providerId?: string) => {
-      const provider = providerId ?? localTranscriptionProvider;
-      if (provider === "nvidia") {
-        setParakeetModel(modelId);
-      } else if (provider === "cohere") {
-        setCohereModel(modelId);
-      } else {
-        setWhisperModel(modelId);
-      }
-    },
-    [localTranscriptionProvider, setParakeetModel, setCohereModel, setWhisperModel]
-  );
-
-  const selectedCloudModelStreams = Boolean(
-    getTranscriptionProvider(cloudTranscriptionProvider)?.models.some(
-      (model) => model.id === cloudTranscriptionModel && model.streaming
-    )
-  );
-  const previewAvailable = supportsLiveTranscriptionPreview(
-    effectiveTranscriptionMode,
-    selectedCloudModelStreams
-  );
+  const previewAvailable = supportsLiveTranscriptionPreview("self-hosted", false);
 
   const renderPreviewToggle = () => (
     <SettingsPanel>
@@ -694,236 +350,25 @@ function TranscriptionSection({
     </SettingsPanel>
   );
 
-  const renderTranscriptionPicker = (mode?: "cloud" | "local") => (
-    <TranscriptionModelPicker
-      selectedCloudProvider={cloudTranscriptionProvider}
-      onCloudProviderSelect={setCloudTranscriptionProvider}
-      selectedCloudModel={cloudTranscriptionModel}
-      onCloudModelSelect={setCloudTranscriptionModel}
-      selectedLocalModel={
-        localTranscriptionProvider === "nvidia"
-          ? parakeetModel
-          : localTranscriptionProvider === "cohere"
-            ? cohereModel
-            : whisperModel
-      }
-      onLocalModelSelect={handleLocalModelSelect}
-      selectedLocalProvider={localTranscriptionProvider}
-      onLocalProviderSelect={setLocalTranscriptionProvider}
-      useLocalWhisper={mode === "local" || (!mode && useLocalWhisper)}
-      onModeChange={
-        mode
-          ? noop
-          : (isLocal) => {
-              setUseLocalWhisper(isLocal);
-              updateTranscriptionSettings({ useLocalWhisper: isLocal });
-              if (isLocal) setCloudTranscriptionMode("byok");
-            }
-      }
-      mode={mode}
-      cloudTranscriptionBaseUrl={cloudTranscriptionBaseUrl}
-      setCloudTranscriptionBaseUrl={setCloudTranscriptionBaseUrl}
-      variant="settings"
-    />
-  );
-
-  // Local decoding still serves meetings and uploads under a managed-config
-  // error, so this stays a card alongside the rest of the section (including
-  // the GPU selector below) instead of an early return that hides it.
-  const errorCard =
-    managed.kind === "error" ? (
-      <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3" role="alert">
-        <div className="flex items-start gap-2">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-          <div>
-            <p className="text-sm font-medium">
-              {t("settingsPage.aiModels.managedEnterprise.errorTitle")}
-            </p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {managed.messageKey ? t(managed.messageKey) : managed.message}
-            </p>
-          </div>
-        </div>
-      </div>
-    ) : null;
-
-  const managedCard =
-    managed.kind === "managed" ? (
-      <div className="space-y-3 rounded-lg border border-primary/20 bg-primary/[0.03] p-3">
-        <div className="flex items-start gap-2.5">
-          <div className="rounded-md bg-primary/10 p-1.5 text-primary">
-            <ShieldCheck className="h-4 w-4" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">
-              {t("settingsPage.aiModels.managedEnterprise.title")}
-            </p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {enterpriseProviderName(managed.provider)} ·{" "}
-              <span className="font-mono">{managed.model}</span>
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("settingsPage.aiModels.managedEnterprise.description")}
-            </p>
-          </div>
-        </div>
-        {managed.mode !== "managed_required" && managed.allowManualSetup && (
-          <div className="flex flex-wrap items-center gap-2 border-t border-border/70 pt-3">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setEnterpriseTranscriptionSetupMode("manual")}
-            >
-              {t("settingsPage.aiModels.managedEnterprise.usePersonalSetup")}
-            </Button>
-          </div>
-        )}
-      </div>
-    ) : null;
-
   return (
     <div className="space-y-4">
-      {errorCard}
-      {managedCard}
-      <EnterpriseAudioSettings />
-      {!errorCard && !managedCard && (
-        <>
-          {enterpriseTranscriptionSetupMode === "manual" && managedAvailable.kind === "managed" && (
-            <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 p-3">
-              <div className="min-w-0">
-                <p className="text-sm font-medium">
-                  {t("settingsPage.aiModels.managedEnterprise.availableTitle")}
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {t("settingsPage.aiModels.managedEnterprise.availableDescription", {
-                    provider: enterpriseProviderName(managedAvailable.provider),
-                  })}
-                </p>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="shrink-0"
-                onClick={() => setEnterpriseTranscriptionSetupMode("managed")}
-              >
-                {t("settingsPage.aiModels.managedEnterprise.useManaged")}
-              </Button>
-            </div>
-          )}
-          <InferenceModeSelector
-            modes={transcriptionModes}
-            activeMode={effectiveTranscriptionMode}
-            onSelect={handleTranscriptionModeSelect}
-          />
-
-          {effectiveTranscriptionMode === "providers" && renderTranscriptionPicker("cloud")}
-          {effectiveTranscriptionMode === "local" && renderTranscriptionPicker("local")}
-          {previewAvailable && renderPreviewToggle()}
-
-          {effectiveTranscriptionMode === "self-hosted" && (
-            <SelfHostedPanel
-              service="transcription"
-              url={remoteTranscriptionUrl}
-              onUrlChange={setRemoteTranscriptionUrl}
-              model={remoteTranscriptionModel}
-              onModelChange={setRemoteTranscriptionModel}
-              headers={selfHostedHeaders}
-              onHeadersChange={(rows) => setSelfHostedSttHeaders("dictation", rows)}
-            />
-          )}
-        </>
-      )}
-
-      {/* Local decoding still serves meetings and uploads, so the GPU choice stays reachable. */}
-      <GpuDeviceSelector purpose="transcription" />
+      <SelfHostedPanel
+        service="transcription"
+        url={remoteTranscriptionUrl}
+        onUrlChange={setRemoteTranscriptionUrl}
+        model={remoteTranscriptionModel}
+        onModelChange={setRemoteTranscriptionModel}
+        headers={selfHostedHeaders}
+        onHeadersChange={(rows) => setSelfHostedSttHeaders("dictation", rows)}
+      />
+      {previewAvailable && renderPreviewToggle()}
     </div>
-  );
-}
-
-interface AiModelsSectionProps {
-  useCleanupModel: boolean;
-  setUseCleanupModel: (value: boolean) => void;
-  toast: (opts: {
-    title: string;
-    description: string;
-    variant?: "default" | "destructive" | "success";
-    duration?: number;
-  }) => void;
-}
-
-const CLEANUP_MODE_TOAST_KEY: Record<InferenceMode, string> = {
-  openwhispr: "switchedCloud",
-  providers: "switchedProviders",
-  local: "switchedLocal",
-  "self-hosted": "switchedSelfHosted",
-  enterprise: "switchedEnterprise",
-};
-
-function NoteFormattingSettings() {
-  const { t } = useTranslation();
-  const autoGenerateNoteTitle = useSettingsStore((s) => s.autoGenerateNoteTitle);
-  const setAutoGenerateNoteTitle = useSettingsStore((s) => s.setAutoGenerateNoteTitle);
-
-  return (
-    <div className="space-y-4">
-      <SettingsPanel>
-        <SettingsPanelRow>
-          <SettingsRow
-            label={t("settingsPage.noteFormatting.autoGenerateTitle")}
-            description={t("settingsPage.noteFormatting.autoGenerateTitleDescription")}
-          >
-            <Toggle checked={autoGenerateNoteTitle} onChange={setAutoGenerateNoteTitle} />
-          </SettingsRow>
-        </SettingsPanelRow>
-      </SettingsPanel>
-      <InferenceConfigEditor scope="noteFormatting" />
-    </div>
-  );
-}
-
-function AiModelsSection({ useCleanupModel, setUseCleanupModel, toast }: AiModelsSectionProps) {
-  const { t } = useTranslation();
-
-  const handleCleanupModeChange = (mode: InferenceMode) => {
-    const toastKey = CLEANUP_MODE_TOAST_KEY[mode];
-    toast({
-      title: t(`settingsPage.aiModels.toasts.${toastKey}.title`),
-      description: t(`settingsPage.aiModels.toasts.${toastKey}.description`),
-      variant: "success",
-      duration: 3000,
-    });
-  };
-
-  return (
-    <DictationCleanupSettings
-      enabled={useCleanupModel}
-      onEnabledChange={setUseCleanupModel}
-      onModeChange={handleCleanupModeChange}
-    >
-      <GpuDeviceSelector purpose="intelligence" />
-    </DictationCleanupSettings>
   );
 }
 
 type SpeechTab = "dictation" | "noteRecording" | "upload";
-type LlmTab =
-  | "dictationCleanup"
-  | "dictationAgent"
-  | "dictationTranslation"
-  | "noteFormatting"
-  | "chatIntelligence";
 
 const SPEECH_TABS: SpeechTab[] = ["dictation", "noteRecording", "upload"];
-const LLM_TABS: LlmTab[] = [
-  "dictationCleanup",
-  "dictationAgent",
-  "dictationTranslation",
-  "noteFormatting",
-  "chatIntelligence",
-];
-const AGENT_LLM_TABS = new Set<LlmTab>(["dictationAgent", "chatIntelligence"]);
 
 function useSubTab<T extends string>(storageKey: string, options: readonly T[], initial?: T) {
   const [tab, setTab] = useLocalStorage<T>(storageKey, initial ?? options[0]);
@@ -1038,69 +483,6 @@ function SpeechToTextTabs({
       <TabPanel active={tab === "dictation"}>{renderDictation()}</TabPanel>
       <TabPanel active={tab === "noteRecording"}>{renderNoteRecording()}</TabPanel>
       <TabPanel active={tab === "upload"}>{renderUpload()}</TabPanel>
-      <LocalOffInstalledModels scope="transcription" />
-    </div>
-  );
-}
-
-function LlmsTabs({
-  initialTab,
-  renderDictationCleanup,
-  renderDictationAgent,
-  renderDictationTranslation,
-  renderNoteFormatting,
-  renderChatIntelligence,
-}: {
-  initialTab?: LlmTab;
-  renderDictationCleanup: () => React.ReactNode;
-  renderDictationAgent: () => React.ReactNode;
-  renderDictationTranslation: () => React.ReactNode;
-  renderNoteFormatting: () => React.ReactNode;
-  renderChatIntelligence: () => React.ReactNode;
-}) {
-  const { t } = useTranslation();
-  const agentAllowed = usePolicyStore(isAgentAllowed);
-  const visibleTabIds = agentAllowed
-    ? LLM_TABS
-    : LLM_TABS.filter((tabId) => !AGENT_LLM_TABS.has(tabId));
-  const [tab, setTab] = useSubTab<LlmTab>("settings.llmsTab", visibleTabIds, initialTab);
-
-  const subTabs = [
-    { id: "dictationCleanup", name: t("settingsPage.llms.tabs.dictationCleanup") },
-    { id: "dictationAgent", name: t("settingsPage.llms.tabs.dictationAgent") },
-    { id: "dictationTranslation", name: t("settingsPage.llms.tabs.dictationTranslation") },
-    { id: "noteFormatting", name: t("settingsPage.llms.tabs.noteFormatting") },
-    { id: "chatIntelligence", name: t("settingsPage.llms.tabs.chatIntelligence") },
-  ].filter((item) => visibleTabIds.includes(item.id as LlmTab));
-
-  return (
-    <div className="space-y-4">
-      <SectionHeader
-        title={t("settingsPage.llms.title")}
-        description={t("settingsPage.llms.description")}
-      />
-      <ProviderTabs
-        providers={subTabs}
-        selectedId={tab}
-        onSelect={(id) => setTab(id as LlmTab)}
-        renderIcon={(id) => {
-          if (id === "dictationCleanup") return <Wand2 className="w-3.5 h-3.5" />;
-          if (id === "dictationAgent") return <Sparkles className="w-3.5 h-3.5" />;
-          if (id === "dictationTranslation") return <Languages className="w-3.5 h-3.5" />;
-          if (id === "noteFormatting") return <BookOpen className="w-3.5 h-3.5" />;
-          return <MessageSquare className="w-3.5 h-3.5" />;
-        }}
-      />
-      <TabPanel active={tab === "dictationCleanup"}>{renderDictationCleanup()}</TabPanel>
-      {agentAllowed && (
-        <TabPanel active={tab === "dictationAgent"}>{renderDictationAgent()}</TabPanel>
-      )}
-      <TabPanel active={tab === "dictationTranslation"}>{renderDictationTranslation()}</TabPanel>
-      <TabPanel active={tab === "noteFormatting"}>{renderNoteFormatting()}</TabPanel>
-      {agentAllowed && (
-        <TabPanel active={tab === "chatIntelligence"}>{renderChatIntelligence()}</TabPanel>
-      )}
-      <LocalOffInstalledModels scope="llm" />
     </div>
   );
 }
@@ -1325,7 +707,6 @@ export default function SettingsPage({
 
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const [isRemovingModels, setIsRemovingModels] = useState(false);
-  const [retiredLocalModels, setRetiredLocalModels] = useState<Array<{ name: string }>>([]);
   const [cachePathHint, setCachePathHint] = useState(
     typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
       ? "%USERPROFILE%\\.cache\\openwhispr"
@@ -1340,35 +721,8 @@ export default function SettingsPage({
       .catch(() => {});
   }, []);
 
-  const {
-    status: updateStatus,
-    info: updateInfo,
-    downloadProgress: updateDownloadProgress,
-    isChecking: checkingForUpdates,
-    isDownloading: downloadingUpdate,
-    isInstalling: installInitiated,
-    checkForUpdates,
-    downloadUpdate,
-    installUpdate: installUpdateAction,
-    getAppVersion,
-  } = useUpdater();
-
-  const organizationManagesUpdates = updateStatus.updateMode === "it_managed";
-  const updatePolicyUnavailable =
-    updateStatus.policyReady === false && updateStatus.policyUnavailable === true;
-  const updatePolicyPending = updateStatus.policyReady === false && !updatePolicyUnavailable;
-  const updateToggleLocked =
-    updatePolicyPending || updateStatus.updateMode === "always_on" || organizationManagesUpdates;
-
-  const isUpdateAvailable =
-    !updateStatus.isDevelopment && (updateStatus.updateAvailable || updateStatus.updateDownloaded);
-  const showUpdateDetails =
-    !organizationManagesUpdates &&
-    (isUpdateAvailable || updateStatus.updateDownloaded || updateInfo?.releaseNotes);
-
   const migration = useMigration();
 
-  const { checkWhisperInstallation } = useWhisper();
   const permissionsHook = usePermissions(showAlertDialog);
   const systemAudio = useSystemAudioPermission();
   useClipboard(showAlertDialog);
@@ -1394,12 +748,8 @@ export default function SettingsPage({
   const [hasMountedSpeechToText, setHasMountedSpeechToText] = useState(
     activeSection === "speechToText"
   );
-  const [hasMountedLlms, setHasMountedLlms] = useState(activeSection === "llms");
   if (activeSection === "speechToText" && !hasMountedSpeechToText) {
     setHasMountedSpeechToText(true);
-  }
-  if (activeSection === "llms" && !hasMountedLlms) {
-    setHasMountedLlms(true);
   }
 
   const handleClearAllAudio = async () => {
@@ -1741,26 +1091,6 @@ export default function SettingsPage({
   }, [toast, t]);
 
   useEffect(() => {
-    let mounted = true;
-
-    const timer = setTimeout(async () => {
-      if (!mounted) return;
-
-      const version = await getAppVersion();
-      if (version && mounted) setCurrentVersion(version);
-
-      if (mounted) {
-        checkWhisperInstallation();
-      }
-    }, 100);
-
-    return () => {
-      mounted = false;
-      clearTimeout(timer);
-    };
-  }, [checkWhisperInstallation, getAppVersion]);
-
-  useEffect(() => {
     const loadEffectiveDefaultHotkey = async () => {
       try {
         const key = await window.electronAPI?.getEffectiveDefaultHotkey?.();
@@ -1786,30 +1116,6 @@ export default function SettingsPage({
     return () => cleanup?.();
   }, [toast, t, setActivationMode]);
 
-  useEffect(() => {
-    if (installInitiated) {
-      if (installTimeoutRef.current) {
-        clearTimeout(installTimeoutRef.current);
-      }
-      installTimeoutRef.current = setTimeout(() => {
-        showAlertDialog({
-          title: t("settingsPage.general.updates.dialogs.almostThere.title"),
-          description: t("settingsPage.general.updates.dialogs.almostThere.description"),
-        });
-      }, 10000);
-    } else if (installTimeoutRef.current) {
-      clearTimeout(installTimeoutRef.current);
-      installTimeoutRef.current = null;
-    }
-
-    return () => {
-      if (installTimeoutRef.current) {
-        clearTimeout(installTimeoutRef.current);
-        installTimeoutRef.current = null;
-      }
-    };
-  }, [installInitiated, showAlertDialog, t]);
-
   const resetAccessibilityPermissions = () => {
     const message = t("settingsPage.permissions.resetAccessibility.description");
 
@@ -1821,37 +1127,6 @@ export default function SettingsPage({
       },
     });
   };
-
-  const refreshRetiredLocalModels = useCallback(async () => {
-    setRetiredLocalModels(
-      (await window.electronAPI?.listRetiredLocalModels?.(selectedLocalSpeechModelIds())) ?? []
-    );
-  }, []);
-
-  useEffect(() => {
-    void refreshRetiredLocalModels().catch(() => {});
-  }, [refreshRetiredLocalModels, registryVersion]);
-
-  const handleRemoveRetiredModels = useCallback(() => {
-    showConfirmDialog({
-      title: t("settingsPage.developer.retiredModels.confirmTitle"),
-      description: t("settingsPage.developer.retiredModels.confirmDescription"),
-      confirmText: t("settingsPage.developer.removeModels.confirmText"),
-      variant: "destructive",
-      onConfirm: async () => {
-        const result = await window.electronAPI?.deleteRetiredLocalModels?.(
-          selectedLocalSpeechModelIds()
-        );
-        await refreshRetiredLocalModels();
-        if (!result?.success) {
-          showAlertDialog({
-            title: t("settingsPage.developer.removeModels.failedTitle"),
-            description: t("settingsPage.developer.retiredModels.failedDescription"),
-          });
-        }
-      },
-    });
-  }, [refreshRetiredLocalModels, showConfirmDialog, showAlertDialog, t]);
 
   const handleRemoveModels = useCallback(() => {
     if (isRemovingModels) return;
@@ -1881,9 +1156,6 @@ export default function SettingsPage({
               description: t("settingsPage.developer.removeModels.failedDescription"),
             });
           } else {
-            // Every local model is gone, so no local selection can still resolve.
-            clearMissingLocalModelSelections(() => false);
-            discardPendingLocalSetup();
             window.dispatchEvent(new Event("openwhispr-models-cleared"));
             showAlertDialog({
               title: t("settingsPage.developer.removeModels.successTitle"),
@@ -2052,7 +1324,7 @@ export default function SettingsPage({
     }
   }, [usage, yearlyBilling, toast, t]);
 
-  const billingEnabled = Boolean(AUTH_URL) && activeSection === "plansBilling" && isLoaded;
+  const billingEnabled = false;
   const { state: personalState, refreshSummary: refreshPersonalSummary } = usePersonalPlanBilling({
     enabled: billingEnabled,
     view: billingView.kind,
@@ -2312,355 +1584,6 @@ export default function SettingsPage({
 
   const renderSectionContent = () => {
     switch (activeSection) {
-      case "account":
-        return (
-          <div className="space-y-5">
-            {!AUTH_URL ? (
-              <>
-                <SectionHeader
-                  title={t("settingsPage.account.title")}
-                  description={t("settingsPage.account.notConfigured")}
-                />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <SettingsRow
-                      label={t("settingsPage.account.featuresDisabled")}
-                      description={t("settingsPage.account.featuresDisabledDescription")}
-                    >
-                      <Badge variant="warning">{t("settingsPage.account.disabled")}</Badge>
-                    </SettingsRow>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </>
-            ) : isLoaded && isSignedIn && user ? (
-              <>
-                <SectionHeader title={t("settingsPage.account.title")} />
-                <div className="flex items-center gap-3">
-                  <AccountAvatar
-                    image={user.image}
-                    name={user.name || t("settingsPage.account.user")}
-                  />
-                  <div className="min-w-0">
-                    <p dir="auto" className="truncate text-[13px] font-semibold text-foreground">
-                      {user.name || t("settingsPage.account.user")}
-                    </p>
-                    <p className="truncate text-xs text-muted-foreground">
-                      <bdi dir="ltr">{user.email}</bdi>
-                    </p>
-                  </div>
-                </div>
-                {isOfflineAccount && (
-                  <SettingsPanel>
-                    <SettingsPanelRow>
-                      <SettingsRow
-                        label={t("settingsPage.account.offlineAccount.title")}
-                        description={t("settingsPage.account.offlineAccount.description")}
-                      >
-                        <Badge variant="outline">{t("settingsPage.account.offline")}</Badge>
-                      </SettingsRow>
-                    </SettingsPanelRow>
-                  </SettingsPanel>
-                )}
-                <ProfileSection
-                  name={user.name || ""}
-                  readOnly={isOfflineAccount}
-                  onSessionRefresh={() => {
-                    void refetch();
-                  }}
-                />
-
-                <div className="flex justify-end">
-                  <Button
-                    onClick={requestSignOut}
-                    variant="outline"
-                    disabled={isSigningOut}
-                    size="sm"
-                    className="text-destructive border-destructive/30 hover:bg-destructive/10 hover:border-destructive/50"
-                  >
-                    <LogOut className="me-1.5 h-3.5 w-3.5" />
-                    {isSigningOut
-                      ? t("settingsPage.account.signOut.signingOut")
-                      : t("settingsPage.account.signOut.signOut")}
-                  </Button>
-                </div>
-
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <SettingsRow
-                      label={t("settingsPage.account.deleteAccount.label")}
-                      description={t("settingsPage.account.deleteAccount.labelDescription")}
-                    >
-                      <Button
-                        onClick={handleDeleteAccount}
-                        variant="outline"
-                        disabled={isDeletingAccount || isOfflineAccount}
-                        size="sm"
-                        className="text-destructive border-destructive/30 hover:bg-destructive/10 hover:border-destructive"
-                      >
-                        <Trash2 className="me-1.5 h-3.5 w-3.5" />
-                        {isDeletingAccount
-                          ? t("settingsPage.account.deleteAccount.deleting")
-                          : t("settingsPage.account.deleteAccount.button")}
-                      </Button>
-                    </SettingsRow>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </>
-            ) : isLoaded ? (
-              <>
-                <SectionHeader title={t("settingsPage.account.title")} />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <SettingsRow
-                      label={t("settingsPage.account.notSignedIn")}
-                      description={t("settingsPage.account.notSignedInDescription")}
-                    >
-                      <Badge variant="outline">{t("settingsPage.account.offline")}</Badge>
-                    </SettingsRow>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-
-                <div className="rounded-lg border border-primary/20 dark:border-primary/15 bg-primary/3 dark:bg-primary/6 p-4">
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-md bg-primary/10 dark:bg-primary/15 flex items-center justify-center shrink-0 mt-0.5">
-                      <Sparkles className="w-4 h-4 text-primary" />
-                    </div>
-                    <div className="min-w-0 flex-1 space-y-2.5">
-                      <div>
-                        <p className="text-xs font-medium text-foreground">
-                          {t("settingsPage.account.trialCta.title")}
-                        </p>
-                        <p className="text-xs text-muted-foreground leading-relaxed mt-0.5">
-                          {t("settingsPage.account.trialCta.description")}
-                        </p>
-                      </div>
-                      <Button onClick={requestSignIn} size="sm" className="w-full">
-                        <UserCircle className="me-1.5 h-3.5 w-3.5" />
-                        {t("settingsPage.account.trialCta.button")}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <>
-                <SectionHeader title={t("settingsPage.account.title")} />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <div className="flex items-center justify-between">
-                      <Skeleton className="h-4 w-32" />
-                      <Skeleton className="h-5 w-16 rounded-full" />
-                    </div>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </>
-            )}
-          </div>
-        );
-
-      case "plansBilling":
-        return (
-          <div className="space-y-5">
-            <header className="space-y-1">
-              <h2 className="text-lg font-medium text-foreground">
-                {t("settingsModal.sections.plansBilling.label")}
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                {t("settingsModal.sections.plansBilling.description")}
-              </p>
-            </header>
-            {!AUTH_URL ? (
-              <>
-                <SectionHeader
-                  title={t("settingsPage.account.pricing.title")}
-                  description={t("settingsPage.account.notConfigured")}
-                />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <SettingsRow
-                      label={t("settingsPage.account.featuresDisabled")}
-                      description={t("settingsPage.account.featuresDisabledDescription")}
-                    >
-                      <Badge variant="warning">{t("settingsPage.account.disabled")}</Badge>
-                    </SettingsRow>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </>
-            ) : isLoaded ? (
-              <>
-                {isSignedIn && (
-                  <PlansBillingPicker
-                    request={billingRequest}
-                    onChange={onBillingRequestChange ?? noop}
-                    personalPlanLabel={
-                      personalState.kind === "ready" && personalState.tier
-                        ? t(`settingsPage.account.planLabels.${personalState.tier}`)
-                        : null
-                    }
-                  />
-                )}
-                {isSignedIn && billingView.kind !== "personal" ? (
-                  <WorkspaceBillingView
-                    view={billingView}
-                    yearly={yearlyBilling}
-                    onYearlyChange={setYearlyBilling}
-                    onViewPersonal={() => onBillingRequestChange?.(PERSONAL_BILLING_REQUEST)}
-                    onRefreshEntitlement={usage?.refetch}
-                  />
-                ) : (
-                  <>
-                    <PersonalPlanView
-                      state={personalState}
-                      onAction={handlePersonalAction}
-                      busyAction={busyAction}
-                      formatDate={formatPersonalBillingDate}
-                      creatorLink={showCreatorLink && <CreatorLinkField />}
-                      grid={
-                        <PlansGrid
-                          isSignedIn={isSignedIn}
-                          onSignIn={requestSignIn}
-                          yearly={yearlyBilling}
-                          onYearlyChange={setYearlyBilling}
-                          pro={proCardAction}
-                          business={businessTile}
-                          businessDowngrade={businessAction}
-                          onBusinessAction={(action) =>
-                            runBusinessTileAction(action, personalHandlers)
-                          }
-                          enterprise={{
-                            action: enterpriseTile,
-                            manage: enterpriseAction,
-                            entitled: workspacePlans.has("enterprise"),
-                          }}
-                          onEnterprise={(action) =>
-                            runEnterpriseTileAction(action, personalHandlers)
-                          }
-                          onRefreshEntitlement={usage?.refetch}
-                          columns={isCompact ? 2 : 3}
-                        />
-                      }
-                    />
-                    <Dialog
-                      open={!!switchPreview}
-                      onOpenChange={(open) => !open && setSwitchPreview(null)}
-                    >
-                      <DialogContent className="sm:max-w-90">
-                        <DialogHeader>
-                          <DialogTitle>
-                            {t("settingsPage.account.pricing.confirmSwitch.title")}
-                          </DialogTitle>
-                          <DialogDescription>
-                            {switchPreview &&
-                              t("settingsPage.account.pricing.confirmSwitch.description", {
-                                plan: switchPreview.tier === "pro" ? "Pro" : "Business",
-                                interval:
-                                  switchPreview.plan === "annual"
-                                    ? t("settingsPage.account.pricing.confirmSwitch.yearly")
-                                    : t("settingsPage.account.pricing.confirmSwitch.monthly"),
-                              })}
-                          </DialogDescription>
-                        </DialogHeader>
-                        {switchPreview && (
-                          <div className="rounded-lg border border-border/70 dark:border-border-subtle/60 overflow-hidden">
-                            <div className="flex justify-between items-center px-3 py-2.5 bg-muted/40 dark:bg-surface-2/50">
-                              <span className="text-xs text-muted-foreground">
-                                {switchPreview.immediateAmount < 0
-                                  ? t("settingsPage.account.pricing.confirmSwitch.accountCredit")
-                                  : t("settingsPage.account.pricing.confirmSwitch.chargeToday")}
-                              </span>
-                              <span
-                                className={cn(
-                                  "text-sm font-semibold",
-                                  switchPreview.immediateAmount < 0
-                                    ? "text-emerald-600 dark:text-emerald-400"
-                                    : "text-foreground"
-                                )}
-                              >
-                                {formatAmount(
-                                  Math.abs(switchPreview.immediateAmount),
-                                  switchPreview.currency
-                                )}
-                              </span>
-                            </div>
-                            <div className="divide-y divide-border/60">
-                              <div className="flex justify-between items-center px-3 py-2">
-                                <span className="text-xs text-muted-foreground">
-                                  {t("settingsPage.account.pricing.confirmSwitch.newPrice")}
-                                </span>
-                                <span className="text-xs font-medium text-foreground">
-                                  {formatAmount(
-                                    switchPreview.newPriceAmount,
-                                    switchPreview.currency
-                                  )}
-                                  /
-                                  {switchPreview.newInterval === "year"
-                                    ? t("settingsPage.account.pricing.confirmSwitch.yr")
-                                    : t("settingsPage.account.pricing.confirmSwitch.mo")}
-                                </span>
-                              </div>
-                              {switchPreview.nextBillingDate && (
-                                <div className="flex justify-between items-center px-3 py-2">
-                                  <span className="text-xs text-muted-foreground">
-                                    {t("settingsPage.account.pricing.confirmSwitch.nextBilling")}
-                                  </span>
-                                  <span className="text-xs font-medium text-foreground">
-                                    {new Date(switchPreview.nextBillingDate).toLocaleDateString()}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                        <DialogFooter>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setSwitchPreview(null)}
-                          >
-                            {t("settingsPage.account.pricing.confirmSwitch.cancel")}
-                          </Button>
-                          <Button
-                            size="sm"
-                            onClick={confirmSwitchPlan}
-                            disabled={usage?.checkoutLoading}
-                          >
-                            {usage?.checkoutLoading ? (
-                              <Loader2 size={14} className="animate-spin" />
-                            ) : (
-                              t("settingsPage.account.pricing.confirmSwitch.confirm")
-                            )}
-                          </Button>
-                        </DialogFooter>
-                      </DialogContent>
-                    </Dialog>
-                  </>
-                )}
-
-                {/* Outside the view switch, so a new workspace's view can replace the grid. */}
-                <CreateWorkspaceDialog
-                  open={createWorkspaceOpen}
-                  onOpenChange={setCreateWorkspaceOpen}
-                  onCreated={(workspaceId) =>
-                    onBillingRequestChange?.({ kind: "workspace", workspaceId })
-                  }
-                />
-              </>
-            ) : (
-              <>
-                <SectionHeader title={t("settingsPage.account.pricing.title")} />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <div className="flex items-center justify-between">
-                      <Skeleton className="h-4 w-32" />
-                      <Skeleton className="h-5 w-16 rounded-full" />
-                    </div>
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </>
-            )}
-          </div>
-        );
-
       case "workspaceGeneral":
         return <WorkspaceGeneralSection onNavigateToSection={onNavigateToSection} />;
 
@@ -2674,13 +1597,6 @@ export default function SettingsPage({
 
       case "workspaceDeveloper":
         return <WorkspaceDeveloperSection />;
-
-      case "toneStyle":
-        return (
-          <ToneStyleSection
-            onOpenCleanupSettings={() => onNavigateToSection?.("llms", "dictationCleanup")}
-          />
-        );
 
       case "general":
         return (
@@ -2900,9 +1816,6 @@ export default function SettingsPage({
               </SettingsPanel>
             </div>
 
-            {/* Import from Granola */}
-            <GranolaImportSection showAlertDialog={showAlertDialog} />
-
             {/* Floating Icon */}
             <div>
               <SectionHeader
@@ -2980,36 +1893,6 @@ export default function SettingsPage({
                     />
                   </SettingsRow>
                 </SettingsPanelRow>
-                {preferredLanguage === "auto" && (
-                  <SettingsPanelRow>
-                    <SettingsRow
-                      label={t("settings.language.chineseScriptLabel")}
-                      description={t("settings.language.chineseScriptDescription")}
-                    >
-                      <Select
-                        value={chineseScriptPreference}
-                        onValueChange={(value: ChineseScriptPreference) =>
-                          updateTranscriptionSettings({ chineseScriptPreference: value })
-                        }
-                      >
-                        <SelectTrigger className="h-7 w-44 text-xs rounded-lg px-2.5 [&>svg]:h-3 [&>svg]:w-3">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="as-transcribed">
-                            {t("settings.language.chineseScriptAsTranscribed")}
-                          </SelectItem>
-                          <SelectItem value="simplified">
-                            {t("settings.language.chineseScriptSimplified")}
-                          </SelectItem>
-                          <SelectItem value="traditional">
-                            {t("settings.language.chineseScriptTraditional")}
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </SettingsRow>
-                  </SettingsPanelRow>
-                )}
               </SettingsPanel>
             </div>
 
@@ -3083,30 +1966,6 @@ export default function SettingsPage({
                     onDeviceSelect={setSelectedMicDevice}
                     onMicWarmHoldSecondsChange={setMicWarmHoldSeconds}
                   />
-                </SettingsPanelRow>
-              </SettingsPanel>
-            </div>
-
-            {/* Dictionary */}
-            <div>
-              <SectionHeader
-                title={t("settingsPage.dictionary.autoLearnTitle", {
-                  defaultValue: "Auto-learn from corrections",
-                })}
-              />
-              <SettingsPanel>
-                <SettingsPanelRow>
-                  <SettingsRow
-                    label={t("settingsPage.dictionary.autoLearnTitle", {
-                      defaultValue: "Auto-learn from corrections",
-                    })}
-                    description={t("settingsPage.dictionary.autoLearnDescription", {
-                      defaultValue:
-                        "When you correct a transcription in the target app, the corrected word is automatically added to your dictionary.",
-                    })}
-                  >
-                    <Toggle checked={autoLearnCorrections} onChange={setAutoLearnCorrections} />
-                  </SettingsRow>
                 </SettingsPanelRow>
               </SettingsPanel>
             </div>
@@ -3692,305 +2551,17 @@ EOF`,
                 )}
               </SettingsPanel>
             </div>
-
-            {/* Voice Agent Hotkey */}
-            {agentAllowedByPolicy && (
-              <div>
-                <SectionHeader
-                  title={t("settingsPage.general.voiceAgentHotkey.title")}
-                  description={t("settingsPage.general.voiceAgentHotkey.description")}
-                />
-                <SettingsPanel>
-                  <SettingsPanelRow>
-                    <HotkeyListInput
-                      value={voiceAgentKey}
-                      onChange={(list) => commitAgentHotkey(setVoiceAgentKey, list)}
-                      onClear={() => commitAgentHotkey(setVoiceAgentKey, "")}
-                      validate={validateVoiceAgentHotkey}
-                      disabled={isAgentHotkeyCommitting}
-                      maxHotkeys={isUsingNativeShortcut ? 1 : undefined}
-                    />
-                  </SettingsPanelRow>
-                </SettingsPanel>
-              </div>
-            )}
-
-            {/* Translation Hotkey */}
-            <div>
-              <SectionHeader
-                title={t("settingsPage.general.translationHotkey.title")}
-                description={t("settingsPage.general.translationHotkey.description")}
-              />
-              <SettingsPanel>
-                <SettingsPanelRow>
-                  <HotkeyListInput
-                    value={translationKey}
-                    onChange={(list) => commitAgentHotkey(setTranslationKey, list)}
-                    onClear={() => commitAgentHotkey(setTranslationKey, "")}
-                    validate={validateTranslationHotkey}
-                    disabled={isAgentHotkeyCommitting}
-                    maxHotkeys={isUsingNativeShortcut ? 1 : undefined}
-                  />
-                </SettingsPanelRow>
-              </SettingsPanel>
-            </div>
-
-            {/* Meeting Mode Hotkey */}
-            <div>
-              <SectionHeader
-                title={t("settingsPage.general.meetingHotkey.title")}
-                description={t("settingsPage.general.meetingHotkey.description")}
-              />
-              <SettingsPanel>
-                <SettingsPanelRow>
-                  <HotkeyListInput
-                    value={meetingKey}
-                    onChange={(list) => registerMeetingHotkey(list)}
-                    onClear={async (): Promise<boolean> => {
-                      const result = await window.electronAPI?.registerMeetingHotkey?.("");
-                      if (!result?.success) {
-                        showAlertDialog({
-                          title: t("hooks.hotkeyRegistration.titles.notRegistered"),
-                          description:
-                            result?.message ||
-                            t("hooks.hotkeyRegistration.errors.couldNotRegister"),
-                        });
-                        return false;
-                      }
-                      setMeetingKey("");
-                      return true;
-                    }}
-                    validate={validateMeetingHotkey}
-                    disabled={isMeetingHotkeyRegistering}
-                    maxHotkeys={isUsingNativeShortcut ? 1 : undefined}
-                  />
-                </SettingsPanelRow>
-                <SettingsPanelRow className="flex items-center justify-between gap-3 border-t border-border/70 dark:border-white/10">
-                  <span className="text-xs text-muted-foreground/80">
-                    {t("settingsPage.general.meetingHotkey.layoutLabel")}
-                  </span>
-                  <Select
-                    value={meetingHotkeyLayoutMode}
-                    onValueChange={(value) =>
-                      setMeetingHotkeyLayoutMode(value as "side-panel" | "full-width")
-                    }
-                  >
-                    <SelectTrigger className="h-7 w-36 text-xs rounded-lg px-2.5 [&>svg]:h-3 [&>svg]:w-3">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem
-                        value="full-width"
-                        className="text-xs py-1.5 ps-2.5 pe-7 rounded-md"
-                      >
-                        {t("settingsPage.general.meetingHotkey.layoutFullWidth")}
-                      </SelectItem>
-                      <SelectItem
-                        value="side-panel"
-                        className="text-xs py-1.5 ps-2.5 pe-7 rounded-md"
-                      >
-                        {t("settingsPage.general.meetingHotkey.layoutSidePanel")}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </SettingsPanelRow>
-              </SettingsPanel>
-            </div>
           </div>
         );
 
       case "speechToText":
-      case "llms":
         return null;
 
       case "privacyData":
         return (
           <div className="space-y-6">
-            {/* Privacy */}
-            <div>
-              <SectionHeader
-                title={t("settingsPage.privacy.title")}
-                description={t("settingsPage.privacy.description")}
-              />
-
-              {isSignedIn && (
-                <div className="mb-4">
-                  <SettingsPanel className="mb-2">
-                    <SettingsPanelRow>
-                      <SettingsRow
-                        label={t("settingsPage.privacy.cloudBackup")}
-                        description={
-                          cloudBackupPolicyAllowed
-                            ? t("settingsPage.privacy.cloudBackupDescription")
-                            : t("common.managedByOrg")
-                        }
-                      >
-                        <Toggle
-                          checked={cloudBackupEnabled}
-                          disabled={
-                            !canChangeCloudBackupPreference(
-                              cloudBackupPolicyAllowed,
-                              cloudBackupEnabled
-                            )
-                          }
-                          onChange={(v) => {
-                            setCloudBackupEnabled(v);
-                            if (v) {
-                              startMigration().catch(console.error);
-                              syncService.requestSyncAll("manual");
-                            }
-                          }}
-                        />
-                      </SettingsRow>
-                    </SettingsPanelRow>
-                  </SettingsPanel>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {t("settingsPage.privacy.cloudBackupTeamCaveat")}
-                  </p>
-                  {migration && (
-                    <div className="mt-2 space-y-1">
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1.5">
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          {t("settingsPage.privacy.cloudNotesMigration", {
-                            done: migration.done,
-                            total: migration.total,
-                          })}
-                        </span>
-                        <span>{Math.round((migration.done / migration.total) * 100)}%</span>
-                      </div>
-                      <div className="h-1 w-full rounded-full bg-muted overflow-hidden">
-                        <div
-                          className="h-full bg-primary transition-all duration-300 ease-out"
-                          style={{ width: `${(migration.done / migration.total) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                  {cloudBackupEnabled &&
-                    isSignedIn &&
-                    (() => {
-                      const lastSyncedAt = localStorage.getItem("lastSyncedAt");
-                      if (!lastSyncedAt) return null;
-                      const date = new Date(lastSyncedAt);
-                      const now = new Date();
-                      const diffMs = now.getTime() - date.getTime();
-                      const diffMin = Math.floor(diffMs / 60000);
-                      const diffHr = Math.floor(diffMs / 3600000);
-                      let relative: string;
-                      if (diffMin < 1) relative = t("settingsPage.privacy.justNow");
-                      else if (diffMin < 60)
-                        relative = t("settingsPage.privacy.minutesAgo", { count: diffMin });
-                      else if (diffHr < 24)
-                        relative = t("settingsPage.privacy.hoursAgo", { count: diffHr });
-                      else
-                        relative = date.toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        });
-                      return (
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {t("settingsPage.privacy.lastSynced", { time: relative })}
-                        </p>
-                      );
-                    })()}
-                </div>
-              )}
-
-              <SettingsPanel>
-                <SettingsPanelRow>
-                  <SettingsRow
-                    label={t("settingsPage.privacy.insightsSync")}
-                    description={
-                      !isSignedIn
-                        ? t("settingsPage.privacy.insightsSyncRequiresAccount")
-                        : !insightsSyncAllowedByPolicy
-                          ? t("common.managedByOrg")
-                          : effectiveDataRetentionEnabled
-                            ? t("settingsPage.privacy.insightsSyncDescription")
-                            : t("settingsPage.privacy.insightsSyncRequiresHistory")
-                    }
-                  >
-                    {/* With history off nothing is counted anywhere: this
-                        device records no counter, and the cloud writes none
-                        either, because analyticsSyncEnabled withholds the
-                        localDate its analytics write requires. Turning this on
-                        could therefore only promise a sync that never happens —
-                        but an already-on toggle must stay switchable off. */}
-                    <Toggle
-                      checked={insightsSyncEnabled}
-                      disabled={
-                        !isSignedIn ||
-                        !canToggleInsightsSync ||
-                        (!effectiveDataRetentionEnabled && !insightsSyncEnabled)
-                      }
-                      onChange={(enabled) => {
-                        if (enabled) void enableInsightsSync();
-                        else disableInsightsSync();
-                      }}
-                    />
-                  </SettingsRow>
-                </SettingsPanelRow>
-                <SettingsPanelRow>
-                  <SettingsRow
-                    label={t("insights.leaderboard.title")}
-                    description={
-                      !isSignedIn
-                        ? t("settingsPage.privacy.leaderboardRequiresAccount")
-                        : leaderboardParticipationError === "read"
-                          ? t("insights.leaderboard.activationError")
-                          : leaderboardLeavePending
-                            ? t("insights.leaderboard.leavePending")
-                            : !insightsSyncAllowedByPolicy
-                              ? t("common.managedByOrg")
-                              : !effectiveDataRetentionEnabled
-                                ? t("settingsPage.privacy.leaderboardRequiresHistory")
-                                : t("settingsPage.privacy.leaderboardDescription")
-                    }
-                  >
-                    <Toggle
-                      checked={isSignedIn && leaderboardParticipationEnabled}
-                      disabled={
-                        !isSignedIn ||
-                        !leaderboardParticipationReady ||
-                        leaderboardPreferencePending ||
-                        leaderboardParticipationUpdating ||
-                        leaderboardParticipationError === "read" ||
-                        (!leaderboardParticipationEnabled &&
-                          (!effectiveDataRetentionEnabled ||
-                            !insightsSyncAllowedByPolicy ||
-                            (!insightsSyncEnabled && !canToggleInsightsSync)))
-                      }
-                      onChange={(enabled) => void updateLeaderboardParticipation(enabled)}
-                    />
-                  </SettingsRow>
-                </SettingsPanelRow>
-                <SettingsPanelRow>
-                  <SettingsRow
-                    label={t("settingsPage.privacy.usageAnalytics")}
-                    description={t("settingsPage.privacy.usageAnalyticsDescription")}
-                  >
-                    <Toggle checked={telemetryEnabled} onChange={setTelemetryEnabled} />
-                  </SettingsRow>
-                </SettingsPanelRow>
-                <SettingsPanelRow>
-                  <SettingsRow
-                    label={t("settingsPage.privacy.modelListUpdates")}
-                    description={t("settingsPage.privacy.modelListUpdatesDescription")}
-                  >
-                    <Toggle
-                      checked={modelListUpdates}
-                      onChange={(enabled) => void updateModelListUpdates(enabled)}
-                    />
-                  </SettingsRow>
-                </SettingsPanelRow>
-              </SettingsPanel>
-            </div>
-
             {/* Audio Retention */}
-            <div className="border-t border-border/70 pt-6">
+            <div>
               <SectionHeader
                 title={t("settingsPage.privacy.audioRetention")}
                 description={t("settingsPage.privacy.audioRetentionDescription")}
@@ -4214,254 +2785,8 @@ EOF`,
       case "system":
         return (
           <div className="space-y-6">
-            {/* Software Updates */}
-            <div>
-              <SectionHeader title={t("settingsPage.general.updates.title")} />
-              <SettingsPanel>
-                <SettingsPanelRow>
-                  <SettingsRow
-                    label={t("settingsPage.general.updates.currentVersion")}
-                    description={
-                      organizationManagesUpdates
-                        ? t("settingsPage.general.updates.itManaged")
-                        : updateStatus.isDevelopment
-                          ? t("settingsPage.general.updates.devMode")
-                          : !updateStatus.isSupported
-                            ? t("settingsPage.general.updates.managedByPackageManager")
-                            : isUpdateAvailable
-                              ? t("settingsPage.general.updates.newVersionAvailable")
-                              : updatePolicyPending
-                                ? t("settingsPage.general.updates.policyLoading")
-                                : updatePolicyUnavailable
-                                  ? t("settingsPage.general.updates.policyUnavailable")
-                                  : t("settingsPage.general.updates.latestVersion")
-                    }
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <span
-                        dir="ltr"
-                        className="text-xs tabular-nums text-muted-foreground font-mono"
-                      >
-                        {currentVersion || t("settingsPage.general.updates.versionPlaceholder")}
-                      </span>
-                      {organizationManagesUpdates ? (
-                        <Badge variant="outline">
-                          {t("settingsPage.general.updates.managedBadge")}
-                        </Badge>
-                      ) : updateStatus.isDevelopment ? (
-                        <Badge variant="warning">
-                          {t("settingsPage.general.updates.badges.dev")}
-                        </Badge>
-                      ) : isUpdateAvailable ? (
-                        <Badge variant="success">
-                          {t("settingsPage.general.updates.badges.update")}
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline">
-                          {t("settingsPage.general.updates.badges.latest")}
-                        </Badge>
-                      )}
-                    </div>
-                  </SettingsRow>
-                </SettingsPanelRow>
-
-                {updateStatus.isSupported && (
-                  <SettingsPanelRow>
-                    <SettingsRow
-                      label={t("settingsPage.general.updates.automaticUpdates")}
-                      description={t(
-                        updatePolicyPending
-                          ? "settingsPage.general.updates.policyLoading"
-                          : updateToggleLocked
-                            ? "settingsPage.general.updates.managedByOrganization"
-                            : "settingsPage.general.updates.automaticUpdatesDescription"
-                      )}
-                    >
-                      <Toggle
-                        checked={updateStatus.effectiveAutoUpdatesEnabled ?? autoUpdatesEnabled}
-                        onChange={setAutoUpdatesEnabled}
-                        disabled={updateToggleLocked}
-                        ariaLabel={t("settingsPage.general.updates.automaticUpdates")}
-                      />
-                    </SettingsRow>
-                  </SettingsPanelRow>
-                )}
-
-                {showUpdateDetails && (
-                  <SettingsPanelRow>
-                    <div className="space-y-2.5">
-                      {isUpdateAvailable && !updateStatus.updateDownloaded && (
-                        <div className="space-y-2">
-                          <Button
-                            onClick={async () => {
-                              try {
-                                await downloadUpdate();
-                              } catch (error) {
-                                const policyMessage = updatePolicyMessageKey(error);
-                                if (policyMessage) {
-                                  toast({ title: t(policyMessage) });
-                                  return;
-                                }
-                                showAlertDialog({
-                                  title: t(
-                                    "settingsPage.general.updates.dialogs.downloadFailed.title"
-                                  ),
-                                  description: t(
-                                    "settingsPage.general.updates.dialogs.downloadFailed.description"
-                                  ),
-                                });
-                              }
-                            }}
-                            disabled={downloadingUpdate}
-                            variant="success"
-                            className="w-full"
-                            size="sm"
-                          >
-                            <Download
-                              size={13}
-                              className={`me-1.5 ${downloadingUpdate ? "animate-pulse" : ""}`}
-                            />
-                            {downloadingUpdate
-                              ? t("settingsPage.general.updates.downloading", {
-                                  progress: Math.round(updateDownloadProgress),
-                                })
-                              : t("settingsPage.general.updates.downloadUpdate", {
-                                  version: updateInfo?.version || "",
-                                })}
-                          </Button>
-
-                          {downloadingUpdate && (
-                            <div className="h-1 w-full overflow-hidden rounded-full bg-muted/50">
-                              <div
-                                className="h-full bg-success transition-[width] duration-200 rounded-full"
-                                style={{
-                                  width: `${Math.min(100, Math.max(0, updateDownloadProgress))}%`,
-                                }}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {updateStatus.updateDownloaded && (
-                        <Button
-                          onClick={() => {
-                            showConfirmDialog({
-                              title: t("settingsPage.general.updates.dialogs.installUpdate.title"),
-                              description: t(
-                                "settingsPage.general.updates.dialogs.installUpdate.description",
-                                { version: updateInfo?.version || "" }
-                              ),
-                              confirmText: t(
-                                "settingsPage.general.updates.dialogs.installUpdate.confirmText"
-                              ),
-                              onConfirm: async () => {
-                                try {
-                                  await installUpdateAction();
-                                } catch (error) {
-                                  const policyMessage = updatePolicyMessageKey(error);
-                                  if (policyMessage) {
-                                    toast({ title: t(policyMessage) });
-                                    return;
-                                  }
-                                  showAlertDialog({
-                                    title: t(
-                                      "settingsPage.general.updates.dialogs.installFailed.title"
-                                    ),
-                                    description: t(
-                                      "settingsPage.general.updates.dialogs.installFailed.description"
-                                    ),
-                                  });
-                                }
-                              },
-                            });
-                          }}
-                          disabled={installInitiated}
-                          className="w-full"
-                          size="sm"
-                        >
-                          <RefreshCw
-                            size={14}
-                            className={`me-2 ${installInitiated ? "animate-spin" : ""}`}
-                          />
-                          {installInitiated
-                            ? t("settingsPage.general.updates.restarting")
-                            : t("settingsPage.general.updates.installAndRestart")}
-                        </Button>
-                      )}
-                    </div>
-
-                    {updateInfo?.releaseNotes && (
-                      <div className="mt-4 pt-4 border-t border-border/70">
-                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-                          <BidiInterpolatedText
-                            text={t("settingsPage.general.updates.whatsNew", {
-                              version: BIDI_VALUE_TOKEN,
-                            })}
-                            value={updateInfo.version}
-                          />
-                        </p>
-                        <div
-                          className="text-xs text-muted-foreground [&_ul]:list-disc [&_ul]:ps-4 [&_ul]:space-y-1 [&_ol]:list-decimal [&_ol]:ps-4 [&_ol]:space-y-1 [&_li]:ps-1 [&_p]:mb-2 [&_p:last-child]:mb-0 [&_a]:text-link [&_a]:underline"
-                          dangerouslySetInnerHTML={{ __html: updateInfo.releaseNotes }}
-                        />
-                      </div>
-                    )}
-                  </SettingsPanelRow>
-                )}
-              </SettingsPanel>
-              {organizationManagesUpdates && updateStatus.stagedUpdate && (
-                <p role="status" className="mt-3 text-xs text-warning">
-                  {t("settingsPage.general.updates.stagedBeforePolicy")}
-                </p>
-              )}
-              <div className="mt-5 flex justify-end">
-                <Button
-                  onClick={async () => {
-                    try {
-                      const result = await checkForUpdates();
-                      const policyMessage = updatePolicyMessageKey(result);
-                      if (policyMessage) {
-                        toast({ title: t(policyMessage) });
-                      } else if (result && !result.updateAvailable) {
-                        toast({
-                          title: t("settingsPage.general.updates.dialogs.noUpdates.title"),
-                          description: t(
-                            "settingsPage.general.updates.dialogs.noUpdates.description"
-                          ),
-                        });
-                      }
-                    } catch {
-                      showAlertDialog({
-                        title: t("settingsPage.general.updates.dialogs.checkFailed.title"),
-                        description: t(
-                          "settingsPage.general.updates.dialogs.checkFailed.description"
-                        ),
-                      });
-                    }
-                  }}
-                  disabled={
-                    checkingForUpdates ||
-                    updatePolicyPending ||
-                    (!organizationManagesUpdates &&
-                      (updateStatus.isDevelopment || !updateStatus.isSupported))
-                  }
-                  variant="outline"
-                  size="sm"
-                >
-                  <RefreshCw
-                    size={13}
-                    className={`me-1.5 ${checkingForUpdates ? "animate-spin" : ""}`}
-                  />
-                  {checkingForUpdates
-                    ? t("settingsPage.general.updates.checking")
-                    : t("settingsPage.general.updates.checkForUpdates")}
-                </Button>
-              </div>
-            </div>
-
             {/* Developer Tools */}
-            <div className="border-t border-border/70 pt-6">
+            <div>
               <DeveloperSection />
             </div>
 
@@ -4505,20 +2830,6 @@ EOF`,
                       </div>
                     </SettingsRow>
                   </SettingsPanelRow>
-                  {retiredLocalModels.length > 0 && (
-                    <SettingsPanelRow>
-                      <SettingsRow
-                        label={t("settingsPage.developer.retiredModels.label")}
-                        description={t("settingsPage.developer.retiredModels.description", {
-                          models: retiredLocalModels.map(({ name }) => name).join(", "),
-                        })}
-                      >
-                        <Button variant="destructive" size="sm" onClick={handleRemoveRetiredModels}>
-                          {t("settingsPage.developer.retiredModels.remove")}
-                        </Button>
-                      </SettingsRow>
-                    </SettingsPanelRow>
-                  )}
                 </SettingsPanel>
 
                 <SettingsPanel>
@@ -4679,17 +2990,11 @@ EOF`,
                   setShowTranscriptionPreview={setShowTranscriptionPreview}
                   toast={toast}
                 />
-                {transcriptionMode === "local" &&
-                  localTranscriptionProvider === "whisper" &&
-                  renderWhisperVadSettings()}
               </div>
             )}
             renderNoteRecording={() => (
               <div className="space-y-6">
                 <MeetingTranscriptionPanel />
-                {transcriptionMode === "local" &&
-                  localTranscriptionProvider === "whisper" &&
-                  renderWhisperVadSettings()}
               </div>
             )}
             renderUpload={() => (
@@ -4697,37 +3002,6 @@ EOF`,
                 <UploadTranscriptionPanel />
               </div>
             )}
-          />
-        </TabPanel>
-      )}
-      {hasMountedLlms && (
-        <TabPanel active={activeSection === "llms"}>
-          <LlmsTabs
-            initialTab={
-              activeSection === "llms" ? (initialSubTab as LlmTab | undefined) : undefined
-            }
-            renderChatIntelligence={() => <ChatAgentSettings />}
-            renderDictationCleanup={() => (
-              <div className="space-y-6">
-                <AiModelsSection
-                  useCleanupModel={useCleanupModel}
-                  setUseCleanupModel={(value) => {
-                    updateCleanupSettings({ useCleanupModel: value });
-                  }}
-                  toast={toast}
-                />
-                <div className="border-t border-border/70 pt-6">
-                  <SectionHeader
-                    title={t("settingsPage.prompts.title")}
-                    description={t("settingsPage.prompts.description")}
-                  />
-                  <PromptStudio />
-                </div>
-              </div>
-            )}
-            renderDictationAgent={() => <DictationAgentSettings />}
-            renderDictationTranslation={() => <DictationTranslationSettings />}
-            renderNoteFormatting={() => <NoteFormattingSettings />}
           />
         </TabPanel>
       )}

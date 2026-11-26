@@ -1,4 +1,4 @@
-import {
+﻿import {
   bareEmailAddress,
   emailBodyBytes,
   isValidEmailAddress,

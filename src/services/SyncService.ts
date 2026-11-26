@@ -24,11 +24,7 @@ import { FoldersService } from "./FoldersService.js";
 import { SpacesService, type MySpace } from "./SpacesService.js";
 import { TranscriptionsService } from "./TranscriptionsService.js";
 import { syncPendingAnalytics } from "./AnalyticsService.js";
-import { DictionaryService, type CloudDictionaryEntry } from "./DictionaryService.js";
-import { SharedDictionaryService } from "./SharedDictionaryService";
 import { SnippetService, type CloudSnippetEntry } from "./SnippetService.js";
-import { SkillsService } from "./SkillsService.js";
-import type { CloudSkillEntry, SkillSyncUnavailable } from "../types/skills";
 import { CloudApiError, isAuthContextError, wasRefusedBeforeSending } from "./cloudApi.js";
 import { LeaderboardService } from "./LeaderboardService";
 import { checkStandInOwnership } from "./standInOwnershipCheck";
@@ -48,7 +44,6 @@ import { readIsSubscribed, subscribeIsSubscribed } from "../lib/subscriptionFlag
 import { readNoteConflictIds, readNoteConflicts } from "../lib/noteConflictRegistry";
 import { serverClockOffsetMs, serverTimeIso } from "../lib/serverClock";
 import { pendingLeaderboardLeaveDeservesPriority } from "../lib/pendingLeaderboardLeave";
-import { hasSharedDictionaryPlan } from "../lib/workspaceBilling";
 import {
   cloudBackupResumed,
   effectiveLocalHistoryEnabled,
@@ -58,28 +53,11 @@ import { usePolicyStore } from "../stores/policyStore";
 import { findDefaultFolder } from "../components/notes/shared";
 import { useSettingsStore } from "../stores/settingsStore";
 import {
-  hasWelcomedSharedDictionary,
-  recordSharedDictionaryArrival,
-  SHARED_DICTIONARY_CAPABILITY_KEY,
-  useSharedDictionaryStore,
-} from "../stores/sharedDictionaryStore";
-import {
   ACTIVE_WORKSPACE_SOURCE_KEY,
   readActiveWorkspaceId,
   useWorkspaceStore,
   WORKSPACE_LIST_CACHE_KEY,
 } from "../stores/workspaceStore";
-import { EMPTY_SHARED_HINTS, selectSharedHintWords } from "../utils/sharedDictionaryHints";
-import type {
-  CloudSharedEntry,
-  CloudSharedHide,
-  SharedContributor,
-  SharedDictionaryHideRecord,
-  SharedDictionaryMeta,
-  SharedDictionaryPage,
-  SharedDictionarySnapshot,
-  SharedScope,
-} from "../types/sharedDictionary";
 import {
   buildNoteCreatePayload,
   buildNoteUpdatePayload,
@@ -139,13 +117,6 @@ function skillBatches<T>(entries: T[]): T[][] {
 }
 
 // How a skills pull went: the names it couldn't write, "failed" when it stopped early, or
-// "unsupported" on an API without skills routes.
-type SkillPullResult = { unwritten: Set<string> } | "failed" | "unsupported";
-
-// A lookup of this computer's copy of a skill that main couldn't finish.
-const isSkillLookupFailed = (row: unknown): row is SkillSyncUnavailable =>
-  (row as SkillSyncUnavailable | null | undefined)?.error === "unavailable";
-
 function isHttpStatus(err: unknown, status: number): boolean {
   return err instanceof CloudApiError && err.status === status;
 }
@@ -767,93 +738,7 @@ function heldOverlapNote(
   );
 }
 
-const scopeKey = (scope: SharedScope): string => scope.space_id ?? "workspace";
-
-// A list the stored meta didn't have (a member added to a space, a restored
-// space, the member re-added): rows pruned earlier are unchanged on the
-// server, so only a snapshot brings them back.
-function hasReturningScope(stored: SharedScope[], incoming: SharedScope[]): boolean {
-  const known = new Set(stored.map(scopeKey));
-  return incoming.some((scope) => !known.has(scopeKey(scope)));
-}
-
-// Later lists win, so a page's is_member and name replace older ones.
-function mergeContributors(lists: SharedContributor[][]): SharedContributor[] {
-  const byUser = new Map<string, SharedContributor>();
-  for (const list of lists) {
-    for (const contributor of list) byUser.set(contributor.user_id, contributor);
-  }
-  return [...byUser.values()];
-}
-
-// The first page of a pass names every adder across the member's lists, so it
-// replaces what a delta stored; a teammate whose words are all gone drops out.
-// An API from before that names only its own page's adders, so a stored
-// contributor who may still have words in the mirror (`adderIds`) is kept,
-// overridden by any page that names them.
-function deltaPassContributors(
-  stored: SharedContributor[],
-  adderIds: ReadonlySet<string>,
-  pages: SharedContributor[][]
-): SharedContributor[] {
-  const stillAdding = stored.filter((contributor) => adderIds.has(contributor.user_id));
-  return mergeContributors([stillAdding, ...pages]);
-}
-
-function countApplyingSharedWords(snapshot: SharedDictionarySnapshot | null | undefined): number {
-  if (!snapshot) return 0;
-  const hints = selectSharedHintWords(snapshot);
-  return hints.space.length + hints.workspace.length;
-}
-
-function isSharedDictionaryCursorExpired(err: unknown): boolean {
-  return (
-    err instanceof CloudApiError &&
-    err.status === 410 &&
-    err.code === "SHARED_DICTIONARY_CURSOR_EXPIRED"
-  );
-}
-
-// The member can't read this workspace's lists any more: why, or null.
-function sharedDictionaryAccessLost(err: unknown): "noAccess" | "ssoRequired" | null {
-  if (!(err instanceof CloudApiError)) return null;
-  if (err.status === 404 && err.code === "SHARED_DICTIONARY_NOT_MEMBER") return "noAccess";
-  if (err.status === 403 && err.code === "SSO_REQUIRED") return "ssoRequired";
-  return null;
-}
-
 export type DictionarySyncResult = "synced" | "skipped" | "failed";
-
-type SharedEntriesPull = "snapshot" | "delta" | "scopesReturned";
-
-// Cached billing can lag behind an upgrade, including after a failed refresh.
-function isKnownWithoutSharedDictionaryPlan(workspaceId: string): boolean {
-  const { loaded, workspaces } = useWorkspaceStore.getState();
-  if (!loaded) return false;
-  const workspace = workspaces.find((candidate) => candidate.id === workspaceId);
-  return workspace !== undefined && !hasSharedDictionaryPlan(workspace);
-}
-
-// batch-create takes shared_at as an ISO timestamp with an offset.
-function toCloudSharedAt(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
-  const ms = Date.parse(hasZone ? value : normalizeTimestamp(value));
-  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
-}
-
-// Same version on both sides, but the local row predates shared_at (pulled by
-// a build that didn't store it): take the cloud's. A pending local edit wins.
-function sharedAtOnlyDiffers(
-  cloudEntry: CloudDictionaryEntry,
-  local: DictionaryEntryItem,
-  cloudTs: string,
-  localTs: string
-): boolean {
-  if (cloudTs !== localTs || local.sync_status === "pending") return false;
-  if (cloudEntry.shared_at === undefined) return false;
-  return Boolean(cloudEntry.shared_at) !== Boolean(local.shared_at);
-}
 
 interface ConversationCreateSource {
   client_conversation_id?: string | null;
@@ -1286,18 +1171,6 @@ export class SyncService {
     localStorage.removeItem("notesTree.expanded");
     // Sign-out can happen offline, before the auth reconcile that resets the workspace store.
     localStorage.removeItem(WORKSPACE_LIST_CACHE_KEY);
-    // Shared lists and hides belong to the departing account. The arrival
-    // toast's flags are keyed by account and stay, so it never repeats.
-    removeLocalStorageKeysWithPrefix(SHARED_DICTIONARY_CURSOR_PREFIX);
-    localStorage.removeItem(SHARED_DICTIONARY_CAPABILITY_KEY);
-    useSharedDictionaryStore.getState().resetForAccountChange();
-    try {
-      await window.electronAPI?.clearSharedDictionary?.();
-    } catch (err) {
-      // Never block sign-out; the cleared cursors make the next account
-      // snapshot (and replace) whatever is left.
-      console.error("Shared dictionary cleanup failed:", err);
-    }
   }
 
   // A deleted account's sync bookkeeping; it holds ids and timestamps only.
@@ -1422,7 +1295,6 @@ export class SyncService {
     if (claimsRows) {
       snapshots.push(["conversations", () => this.pullConversations(true)]);
       snapshots.push(["transcriptions", () => this.pullTranscriptions(true)]);
-      snapshots.push(["dictionary", () => this.pullDictionary(true)]);
       snapshots.push(["snippets", () => this.pullSnippets(true)]);
     }
 
@@ -1525,14 +1397,6 @@ export class SyncService {
     usePolicyStore.subscribe((policyState, previousPolicyState) => {
       if (cloudBackupResumed(previousPolicyState, policyState)) this.requestSyncAll("start");
     });
-    // A workspace this device has no mirror of would otherwise show no shared
-    // words until the next interval. The store's own subscription was added at
-    // import, so it has already moved to the new generation when this runs.
-    useWorkspaceStore.subscribe((state, previous) => {
-      if (state.activeWorkspaceId && state.activeWorkspaceId !== previous.activeWorkspaceId) {
-        void this.syncSharedDictionaryNow();
-      }
-    });
     setInterval(() => this.requestSyncAll("interval"), AUTO_SYNC_INTERVAL_MS);
   }
 
@@ -1604,9 +1468,6 @@ export class SyncService {
           if (!this.passIsCurrent()) return;
         }
         // Both branches below: shared lists follow membership, not cloud backup.
-        const dictionaryGeneration = useSharedDictionaryStore.getState().generation;
-        const sharedResult = await this.syncSharedDictionary(authGeneration);
-        let personalSucceeded = true;
         if (!this.passIsCurrent()) return;
         this.dropFastClockCursors();
         full = this.canSync();
@@ -1631,10 +1492,8 @@ export class SyncService {
           if (!this.passIsCurrent()) return;
           if (this.canSync()) await this.syncTranscriptions();
           if (!this.passIsCurrent()) return;
-          this.dictionaryDirty = true;
           this.snippetsDirty = true;
-          this.skillsDirty = true;
-          if (!(await this.syncDirtyLibraries())) personalSucceeded = false;
+          await this.syncDirtyLibraries();
         } else {
           // Backup is off: team-space content still syncs (membership is
           // consent, D7) and note deletes still propagate so revoked/deleted
@@ -1647,11 +1506,8 @@ export class SyncService {
         // Outside the branch above: Insights uploads ride their own opt-in,
         // while queued erasures run for every authenticated account.
         await this.syncAnalytics();
-        if (!(await this.syncDirtyLibraries())) personalSucceeded = false;
+        await this.syncDirtyLibraries();
         if (!this.passIsCurrent()) return;
-        if (personalSucceeded && sharedResult !== "failed" && (full || sharedResult === "synced")) {
-          useSharedDictionaryStore.getState().markSynced(dictionaryGeneration);
-        }
         // Stamped after the push, so a pass that moved counters is recorded as
         // work rather than as another empty one. A pass that loses auth before
         // reaching here now leaves the streak unstamped where it used to stamp
@@ -1732,10 +1588,6 @@ export class SyncService {
     void this.syncAll(waitForLock);
   }
 
-  async syncDictionaryNow(): Promise<DictionarySyncResult> {
-    return this.syncLibraryNow("dictionary");
-  }
-
   // A pass requested while an edit waited for the lock was deferred to it.
   private async runDeferredSyncAll(): Promise<void> {
     if (!this.syncAllPending) return;
@@ -1743,37 +1595,12 @@ export class SyncService {
     await this.syncAll(true);
   }
 
-  // The Dictionary page's Sync button. Waits for the sync lock rather than
-  // flagging a re-run: a running syncAll() may already be past its shared pass.
-  async syncSharedDictionaryNow(): Promise<DictionarySyncResult> {
-    if (!this.canSyncTeamSpaces()) return "skipped";
-    const accountId = getAuthRequestContextSnapshot().sessionUserId;
-    const authGeneration = getValidatedAuthGeneration();
-    if (!accountId || authGeneration == null) return "skipped";
-    try {
-      return await navigator.locks.request(SYNC_ALL_LOCK, () =>
-        // Its one-time backfill drops the personal dictionary cursor.
-        this.claimSyncCursors(accountId, authGeneration)
-          ? this.syncSharedDictionary(authGeneration)
-          : "skipped"
-      );
-    } catch (err) {
-      if (isAuthContextError(err)) return "skipped";
-      console.error("Shared dictionary sync failed:", err);
-      return "failed";
-    }
-  }
-
   async syncSnippetsNow(): Promise<void> {
     await this.syncLibraryNow("snippets");
   }
 
-  async syncSkillsNow(): Promise<void> {
-    await this.syncLibraryNow("skills");
-  }
-
   private async syncLibraryNow(
-    kind: "dictionary" | "snippets" | "skills"
+    kind: "snippets"
   ): Promise<DictionarySyncResult> {
     if (!this.canSync()) return "skipped";
     this[`${kind}Dirty`] = true;
@@ -1806,24 +1633,15 @@ export class SyncService {
   }
 
   private async syncDirtyLibraries(): Promise<boolean> {
-    let dictionarySucceeded = true;
-    // A write may arrive during a different library's pass, including one already visited.
     while (
       this.passIsCurrent() &&
       this.canSync() &&
-      (this.dictionaryDirty || this.snippetsDirty || this.skillsDirty)
+      this.snippetsDirty
     ) {
-      for (const kind of ["dictionary", "snippets", "skills"] as const) {
-        if (!this.passIsCurrent() || !this.canSync()) return dictionarySucceeded;
-        if (!this[`${kind}Dirty`]) continue;
-        this[`${kind}Dirty`] = false;
-        if (kind === "dictionary") {
-          if (!(await this.syncDictionary())) dictionarySucceeded = false;
-        } else if (kind === "snippets") await this.syncSnippets();
-        else await this.syncSkills();
-      }
+      this.snippetsDirty = false;
+      await this.syncSnippets();
     }
-    return dictionarySucceeded;
+    return true;
   }
 
   debouncedPush(entityType: string, entityId: number): void {
@@ -5382,651 +5200,6 @@ export class SyncService {
     }
   }
 
-  private async syncDictionary(): Promise<boolean> {
-    // Fail loud on preload skew: a missing binding silently optional-chained to
-    // a no-op would lose user data, so assert the whole surface up front.
-    const api = window.electronAPI;
-    const required = [
-      "getPendingDictionary",
-      "getPendingDictionaryDeletes",
-      "getDictionaryByClientId",
-      "upsertDictionaryFromCloud",
-      "markDictionarySynced",
-      "hardDeleteDictionary",
-      "clearDictionaryCloudId",
-      "broadcastDictionaryUpdated",
-    ] as const;
-    const missing = required.filter((name) => typeof api[name] !== "function");
-    if (missing.length > 0) {
-      throw new Error(
-        `Dictionary IPC bindings missing — preload out of date: ${missing.join(", ")}`
-      );
-    }
-
-    const pushed = await this.pushPendingDictionary();
-    if (!this.passIsCurrent()) return false;
-    const deleted = await this.pushDictionaryDeletes();
-    if (!this.passIsCurrent()) return false;
-    const pulled = await this.pullDictionary();
-    return pushed && deleted && pulled;
-  }
-
-  private async pushPendingDictionary(): Promise<boolean> {
-    const accountId = getAuthRequestContextSnapshot().sessionUserId;
-    const authGeneration = getValidatedAuthGeneration();
-    if (authGeneration == null) return false;
-    const pending = (await window.electronAPI.getPendingDictionary?.()) ?? [];
-    if (pending.length === 0) return true;
-    let succeeded = true;
-
-    const updates = pending.filter((e) => e.cloud_id);
-    const creates = pending.filter((e) => !e.cloud_id);
-
-    const parkedKey = parked404Key("dictionary", accountId);
-    const parked = this.readLocalRecord<string>(parkedKey);
-    const stillParked: Record<string, string> = {};
-    for (const entry of updates) {
-      // The account's own row is re-created, so it is never parked.
-      const own = accountId !== null && entry.account_id === accountId;
-      if (!own && parked[entry.client_dict_id] === entry.updated_at) {
-        stillParked[entry.client_dict_id] = entry.updated_at;
-        continue;
-      }
-      try {
-        const server = await DictionaryService.update(
-          entry.cloud_id!,
-          {
-            word: entry.word,
-            source: entry.source,
-            // Only a local set or clear: an ordinary edit leaves the server's
-            // value alone, which another device may have set meanwhile.
-            ...(entry.shared_at_dirty ? { shared_at: toCloudSharedAt(entry.shared_at) } : {}),
-          },
-          authGeneration
-        );
-        await window.electronAPI.markDictionarySynced?.(
-          entry.id,
-          server.id,
-          server.updated_at,
-          entry.word,
-          entry.source,
-          server.source,
-          entry,
-          authGeneration
-        );
-      } catch (err) {
-        succeeded = false;
-        // 404: the cloud row is gone. The account's own row loses its stale
-        // cloud_id, so the next push re-creates it; an unattributed one is
-        // parked instead (see PARKED_UPDATE_404_PREFIX). A clear refused for a
-        // replaced sign-in decides nothing, and the row stays for the next pass.
-        if (isHttpStatus(err, 404)) {
-          const cleared = await window.electronAPI.clearDictionaryCloudId?.(
-            entry.id,
-            authGeneration
-          );
-          if (!own && !cleared?.success && !cleared?.stale) {
-            stillParked[entry.client_dict_id] = entry.updated_at;
-          }
-        } else {
-          if (!isAuthContextError(err)) console.error("Dictionary update sync failed:", err);
-        }
-      }
-    }
-    this.writeLocalRecord(parkedKey, stillParked);
-
-    for (let i = 0; i < creates.length; i += DICTIONARY_BATCH_SIZE) {
-      const chunk = creates.slice(i, i + DICTIONARY_BATCH_SIZE);
-      try {
-        const { created } = await DictionaryService.batchCreate(
-          chunk.map((e) => ({
-            client_dict_id: e.client_dict_id,
-            word: e.word,
-            source: e.source,
-            created_at: e.created_at,
-            updated_at: e.updated_at,
-            // Absent keeps the server's value (a re-created row may revive a
-            // tombstone); a moved word resends it, and a local clear sends null.
-            ...(e.shared_at || e.shared_at_dirty
-              ? { shared_at: toCloudSharedAt(e.shared_at) }
-              : {}),
-          })),
-          authGeneration
-        );
-        const byClientId = new Map(created.map((c) => [c.client_dict_id, c]));
-        let unmatched = 0;
-        for (const local of chunk) {
-          const server = byClientId.get(local.client_dict_id);
-          if (!server) {
-            unmatched += 1;
-            continue;
-          }
-          // 0 changes means the local row was deleted between snapshot and ack —
-          // delete the freshly-created server row so we don't orphan it. A stale
-          // ack (the account changed) never cleans up: the server merges a create
-          // into an existing word, so that row may be the account's own.
-          const result = await window.electronAPI.markDictionarySynced?.(
-            local.id,
-            server.id,
-            server.updated_at,
-            local.word,
-            local.source,
-            server.source,
-            local,
-            authGeneration
-          );
-          if (result && result.changes === 0 && !result.stale) {
-            try {
-              await DictionaryService.delete(server.id, authGeneration);
-            } catch (deleteErr) {
-              succeeded = false;
-              console.error("Dictionary orphan cleanup failed:", deleteErr);
-            }
-          }
-        }
-        if (unmatched > 0) {
-          succeeded = false;
-          console.warn(
-            `Dictionary batch-create: ${unmatched}/${chunk.length} rows had no matching server response`
-          );
-        }
-      } catch (err) {
-        succeeded = false;
-        if (!isAuthContextError(err)) console.error("Dictionary batch create failed:", err);
-      }
-    }
-    return succeeded;
-  }
-
-  private async pushDictionaryDeletes(): Promise<boolean> {
-    const authGeneration = getValidatedAuthGeneration();
-    if (authGeneration == null) return false;
-    let succeeded = true;
-    const queue = this.openDeleteQueue("dictionary", getAuthRequestContextSnapshot().sessionUserId);
-    const deletes = (await window.electronAPI.getPendingDictionaryDeletes?.()) ?? [];
-    for (const entry of deletes) {
-      if (!entry.cloud_id || queue.isParked(entry)) continue;
-      try {
-        await DictionaryService.delete(entry.cloud_id, authGeneration);
-        await window.electronAPI.hardDeleteDictionary?.(entry.id, authGeneration);
-      } catch (err) {
-        // 404: this account's cloud holds no live copy.
-        if (isHttpStatus(err, 404)) {
-          if (await queue.endsUnconfirmed(entry)) {
-            await window.electronAPI.hardDeleteDictionary?.(entry.id, authGeneration);
-          }
-        } else {
-          succeeded = false;
-          if (!isAuthContextError(err)) console.error("Dictionary delete sync failed:", err);
-        }
-      }
-    }
-    queue.save();
-    return succeeded;
-  }
-
-  // A snapshot walks every row from the epoch and leaves the cursors alone.
-  private async pullDictionary(snapshot = false): Promise<boolean> {
-    const authGeneration = getValidatedAuthGeneration();
-    if (authGeneration == null) return false;
-    let changed = false;
-    let succeeded = true;
-    try {
-      const since = snapshot
-        ? DICTIONARY_PULL_EPOCH
-        : (localStorage.getItem("lastSyncedAt.dictionary") ?? DICTIONARY_PULL_EPOCH);
-      const sinceId = snapshot
-        ? undefined
-        : (localStorage.getItem("lastSyncedAt.dictionary.id") ?? undefined);
-
-      let cursor: string | undefined = since;
-      let cursorId: string | undefined = sinceId;
-      let maxUpdatedAt = normalizeTimestamp(since);
-      let maxId = sinceId ?? "";
-      // Starting at the epoch includes tombstones when backfilling moved words.
-      // Keep every page on the updated_at keyset, including the first: switching
-      // from created_at ordering would skip words edited out of creation order.
-      while (true) {
-        const { entries, hasMore } = await DictionaryService.listDelta(
-          cursor,
-          DICTIONARY_BATCH_SIZE,
-          cursorId
-        );
-        if (entries.length === 0) break;
-
-        for (const cloudEntry of entries) {
-          const local = await window.electronAPI.getDictionaryByClientId?.(
-            cloudEntry.client_dict_id ?? ""
-          );
-
-          // Last-writer-wins on normalized timestamps (see normalizeTimestamp).
-          const cloudTs = normalizeTimestamp(cloudEntry.updated_at);
-          const localTs = local ? normalizeTimestamp(local.updated_at) : "";
-
-          if (cloudEntry.deleted_at) {
-            // A pull from the epoch sees old tombstones too; a newer local
-            // edit still waiting to be pushed outlives them. A live one is
-            // re-created: its cloud id is dead, and on a device another
-            // account has used its 404 would otherwise park it for good.
-            if (local?.sync_status === "pending" && localTs > cloudTs) {
-              if (!local.deleted_at) {
-                stopIfPullStale(
-                  await window.electronAPI.keepNewerDictionaryEdit?.(local.id, authGeneration)
-                );
-              }
-            } else if (local) {
-              stopIfPullStale(
-                await window.electronAPI.hardDeleteDictionary?.(local.id, authGeneration)
-              );
-              changed = true;
-            }
-          } else if (
-            !local ||
-            !local.account_id ||
-            cloudTs > localTs ||
-            // A fallback retired here is only this device's guess; a live
-            // cloud row means the server kept it.
-            (local.deleted_at && local.fallback_retired) ||
-            sharedAtOnlyDiffers(cloudEntry, local, cloudTs, localTs)
-          ) {
-            stopIfPullStale(
-              await window.electronAPI.upsertDictionaryFromCloud?.(
-                cloudEntry as unknown as Record<string, unknown>,
-                authGeneration
-              )
-            );
-            changed = true;
-          }
-
-          if (cloudTs > maxUpdatedAt) {
-            maxUpdatedAt = cloudTs;
-            maxId = cloudEntry.id;
-          } else if (cloudTs === maxUpdatedAt && cloudEntry.id > maxId) {
-            maxId = cloudEntry.id;
-          }
-        }
-
-        if (!hasMore) break;
-        const last = entries[entries.length - 1];
-        // Stall guard: a page that ends where it started would loop forever.
-        // An API whose timestamps are finer than the cursor it accepts repeats
-        // a batch written at one instant, so this keeps what the applied pages
-        // reached and ends the pass rather than failing: a pull that saved
-        // nothing would download everything again on every pass.
-        if (last.updated_at === cursor && last.id === cursorId) {
-          succeeded = false;
-          console.warn("Dictionary pull stopped advancing; resuming next pass", {
-            cursor,
-            cursorId,
-          });
-          break;
-        }
-        cursor = last.updated_at;
-        cursorId = last.id;
-      }
-
-      await assertAuthGenerationCurrent(authGeneration);
-      if (!snapshot) {
-        if (maxUpdatedAt) localStorage.setItem("lastSyncedAt.dictionary", maxUpdatedAt);
-        if (maxId) localStorage.setItem("lastSyncedAt.dictionary.id", maxId);
-      }
-    } catch (err) {
-      succeeded = false;
-      if (!isAuthContextError(err)) console.error("Dictionary pull failed:", err);
-    }
-    // Pages applied before a failure are already in the database.
-    if (changed) await window.electronAPI.broadcastDictionaryUpdated?.()?.catch(console.error);
-    return succeeded;
-  }
-
-  // Dropping the cursor makes the next pull read from the epoch, tombstones
-  // included. An interrupted pull saves no cursor, so it simply starts over.
-  private backfillPersonalSharedAt(): void {
-    if (localStorage.getItem(DICTIONARY_SHARED_AT_BACKFILL_KEY) != null) return;
-    localStorage.removeItem("lastSyncedAt.dictionary");
-    localStorage.removeItem("lastSyncedAt.dictionary.id");
-    localStorage.setItem(DICTIONARY_SHARED_AT_BACKFILL_KEY, "true");
-  }
-
-  /**
-   * Mirrors the active workspace's shared lists and the member's hides. DB
-   * writes are keyed by workspace and always safe; publishing (the store's
-   * load, the hints) and the arrival event happen only while the account and
-   * workspace the pass started under are still current.
-   */
-  private async syncSharedDictionary(authGeneration: number): Promise<DictionarySyncResult> {
-    this.backfillPersonalSharedAt();
-    this.sharedDictionaryPassChanged = false;
-    const store = useSharedDictionaryStore.getState();
-    const generation = store.generation;
-    // Not this window's store: it follows a switch made in another window a
-    // task later, and a pass for the old workspace must not publish.
-    const workspaceId = readActiveWorkspaceId();
-    const isCurrent = (): boolean => {
-      const current = useSharedDictionaryStore.getState();
-      return current.generation === generation && current.workspaceId === workspaceId;
-    };
-    const api = window.electronAPI;
-
-    try {
-      const required = [
-        "getSharedDictionary",
-        "applySharedDictionaryPull",
-        "replaceSharedDictionary",
-        "applySharedDictionaryHides",
-        "replaceSharedDictionaryHides",
-        "clearSharedDictionary",
-        "pruneSharedDictionary",
-      ] as const;
-      const missing = required.filter((name) => typeof api?.[name] !== "function");
-      if (missing.length > 0) {
-        throw new Error(
-          `Shared dictionary IPC bindings missing — preload out of date: ${missing.join(", ")}`
-        );
-      }
-
-      // Only the workspaces the member left go: a switch back to one they
-      // still belong to then needs no full re-download. Without a loaded list
-      // nobody can tell, so every mirror stays until one loads.
-      const { loaded, error, workspaces } = useWorkspaceStore.getState();
-      if (loaded && !error) {
-        const keep = workspaces.map((workspace) => workspace.id);
-        // A list loaded before the switch may not name the active one yet.
-        if (workspaceId && !keep.includes(workspaceId)) keep.push(workspaceId);
-        const result = await api.pruneSharedDictionary!(keep);
-        this.noteSharedDictionaryChange(result?.changed);
-        clearSharedCursorsExcept(keep);
-      }
-
-      if (!workspaceId) {
-        if (isCurrent()) {
-          useSettingsStore.getState().setSharedDictionaryHints(EMPTY_SHARED_HINTS, null);
-        }
-        return "skipped";
-      }
-      if (this.sharedDictionaryRoutesMissingFor === authGeneration) return "skipped";
-
-      if (isCurrent()) store.setSyncing(true);
-      const before = await api.getSharedDictionary!(workspaceId);
-      // Billing may have changed on another device since this mirror paused.
-      await this.pullSharedDictionary(workspaceId, before, authGeneration);
-      store.setStatus("ready", workspaceId);
-
-      if (!isCurrent()) return "skipped";
-      const mirrorLoaded = await store.load(workspaceId, generation);
-      if (!isCurrent()) return "skipped";
-      if (!mirrorLoaded) return "failed";
-      if (
-        useSharedDictionaryStore.getState().snapshot?.meta?.paused === false &&
-        isKnownWithoutSharedDictionaryPlan(workspaceId)
-      ) {
-        // The server resumed sharing; refresh the billing that gates its controls.
-        await assertAuthGenerationCurrent(authGeneration);
-        await useWorkspaceStore.getState().refresh();
-        if (!isCurrent()) return "skipped";
-        if (useWorkspaceStore.getState().error) return "failed";
-      }
-      this.announceSharedDictionaryArrival(workspaceId, countApplyingSharedWords(before));
-      return "synced";
-    } catch (err) {
-      if (isAuthContextError(err)) throw err;
-      const lostAccess = workspaceId ? sharedDictionaryAccessLost(err) : null;
-      if (workspaceId && lostAccess) {
-        // The refusal may have been answered under the next account's token.
-        await assertAuthGenerationCurrent(authGeneration);
-        clearSharedCursors(workspaceId);
-        let cleared = true;
-        try {
-          const result = await api?.clearSharedDictionary?.(workspaceId);
-          // Only a clear that removed something is work: a member who stays
-          // locked out must not pin the ambient cadence on every pass.
-          this.noteSharedDictionaryChange(result?.changed);
-        } catch (clearErr) {
-          cleared = false;
-          console.error("Shared dictionary cleanup failed:", clearErr);
-        }
-        store.setStatus(lostAccess, workspaceId);
-        if (!isCurrent()) return "skipped";
-        // A load after a failed clear would republish the lost lists' words.
-        if (cleared) await store.load(workspaceId, generation);
-        else useSettingsStore.getState().setSharedDictionaryHints(EMPTY_SHARED_HINTS, workspaceId);
-        return "skipped";
-      }
-      // A plain 404 is an API without the shared dictionary routes: nothing
-      // to sync, nothing to tell the user.
-      if (isHttpStatus(err, 404)) {
-        this.sharedDictionaryRoutesMissingFor = authGeneration;
-        store.setStatus("unavailable", workspaceId);
-        return "skipped";
-      }
-      console.error("Shared dictionary sync failed:", err);
-      return "failed";
-    } finally {
-      if (isCurrent()) useSharedDictionaryStore.getState().setSyncing(false);
-      // Lets every window's Dictionary page reload a mirror this pass rewrote,
-      // including pages applied before a failure.
-      if (workspaceId && this.sharedDictionaryPassChanged) {
-        this.emitSyncUiEvent("shared-dictionary-changed", { workspaceId });
-      }
-    }
-  }
-
-  private noteSharedDictionaryChange(changed: number | undefined): void {
-    if (!changed) return;
-    this.teamPassMovedWork = true;
-    this.sharedDictionaryPassChanged = true;
-  }
-
-  // Recorded, not marked welcomed: the toast lives in the control panel, which
-  // may be closed or in the tray. It takes the arrival when it's shown (see
-  // SharedDictionaryArrivalToastListener); the event only tells an open one.
-  private announceSharedDictionaryArrival(workspaceId: string, applyingBefore: number): void {
-    const accountId = getAuthRequestContextSnapshot().sessionUserId;
-    if (!accountId) return;
-    const count = countApplyingSharedWords(useSharedDictionaryStore.getState().snapshot);
-    if (applyingBefore > 0 || count === 0) return;
-    if (hasWelcomedSharedDictionary(accountId, workspaceId)) return;
-    const arrival = { accountId, workspaceId, count };
-    recordSharedDictionaryArrival(arrival);
-    this.emitSyncUiEvent("shared-dictionary-arrived", arrival);
-  }
-
-  // An expired cursor or a returning list re-runs the whole pass as a snapshot,
-  // once; that snapshot can't expire (see pullSharedEntries for a list joined
-  // during it).
-  private async pullSharedDictionary(
-    workspaceId: string,
-    before: SharedDictionarySnapshot,
-    authGeneration: number
-  ): Promise<void> {
-    let forceSnapshot = false;
-    while (true) {
-      try {
-        const entries = await this.pullSharedEntries(
-          workspaceId,
-          forceSnapshot ? null : before,
-          authGeneration
-        );
-        if (entries === "scopesReturned") {
-          clearSharedCursors(workspaceId);
-          forceSnapshot = true;
-          continue;
-        }
-        await this.pullSharedHides(workspaceId, entries === "snapshot", authGeneration);
-        return;
-      } catch (err) {
-        if (forceSnapshot || !isSharedDictionaryCursorExpired(err)) throw err;
-        clearSharedCursors(workspaceId);
-        forceSnapshot = true;
-      }
-    }
-  }
-
-  // `mirror` is the workspace's mirror before the pass; null forces the pass's
-  // one re-run as a snapshot.
-  private async pullSharedEntries(
-    workspaceId: string,
-    mirror: SharedDictionarySnapshot | null,
-    authGeneration: number
-  ): Promise<SharedEntriesPull> {
-    const api = window.electronAPI;
-    const key = sharedEntriesCursorKey(workspaceId);
-    const stored = readSharedCursor(key);
-    const storedMeta = mirror?.meta ?? null;
-    const limit = SHARED_DICTIONARY_PAGE_LIMIT;
-
-    // No cursor, or no mirror to apply a delta to: page the whole snapshot
-    // into memory and write it once, so a pass cut short never half-replaces.
-    if (!stored || !storedMeta) {
-      const entries: CloudSharedEntry[] = [];
-      const contributors: SharedContributor[][] = [];
-      let page: SharedDictionaryPage = { limit };
-      let passStartedAt: string | undefined;
-      let firstScopes: SharedScope[] | undefined;
-      while (true) {
-        const response = await SharedDictionaryService.list(workspaceId, page);
-        await assertAuthGenerationCurrent(authGeneration);
-        passStartedAt ??= response.server_time;
-        firstScopes ??= response.scopes;
-        entries.push(...response.entries);
-        contributors.push(response.contributors);
-        if (response.hasMore) {
-          const last = response.entries.at(-1);
-          if (!last || (last.created_at === page.cursor && last.id === page.cursorId)) {
-            throw new Error("Shared dictionary snapshot stopped advancing");
-          }
-          page = { cursor: last.created_at, cursorId: last.id, limit };
-          continue;
-        }
-        // A list the member joined after the first page (added to a space
-        // mid-pass) had its older rows paged past already: re-run once, and
-        // after that keep what was read but store no cursor, so the next pass
-        // snapshots again.
-        const joinedMidPass = hasReturningScope(firstScopes, response.scopes);
-        if (mirror && joinedMidPass) return "scopesReturned";
-        const meta: SharedDictionaryMeta = {
-          scopes: response.scopes,
-          contributors: mergeContributors(contributors),
-          paused: response.paused,
-        };
-        const result = await api.replaceSharedDictionary!(workspaceId, { entries, meta });
-        this.noteSharedDictionaryChange(result?.changed);
-        if (!joinedMidPass) writeSharedCursor(key, null, passStartedAt);
-        return "snapshot";
-      }
-    }
-
-    // Starts before the stored cursor (see DELTA_READ_OVERLAP_MS),
-    // with no since_id, and re-applies the overlap idempotently.
-    const contributors: SharedContributor[][] = [];
-    const adderIds = new Set(
-      (mirror?.entries ?? []).flatMap((entry) => (entry.addedByUserId ? [entry.addedByUserId] : []))
-    );
-    let page: SharedDictionaryPage = { since: overlappedSince(stored), limit };
-    let passStartedAt: string | undefined;
-    while (true) {
-      const response = await SharedDictionaryService.list(workspaceId, page);
-      await assertAuthGenerationCurrent(authGeneration);
-      passStartedAt ??= response.server_time;
-      contributors.push(response.contributors);
-      const upserts = response.entries.filter((entry) => !entry.deleted_at);
-      for (const entry of upserts) {
-        if (entry.added_by_user_id) adderIds.add(entry.added_by_user_id);
-      }
-      const deletedIds = response.entries
-        .filter((entry) => entry.deleted_at)
-        .map((entry) => entry.id);
-      const last = response.entries.at(-1);
-
-      if (response.hasMore) {
-        const result = await api.applySharedDictionaryPull!(workspaceId, { upserts, deletedIds });
-        this.noteSharedDictionaryChange(result?.changed);
-        // Stall guard: the next request must start after this one.
-        if (!last || (last.updated_at === page.since && last.id === page.sinceId)) {
-          throw new Error("Shared dictionary delta stopped advancing");
-        }
-        page = { since: last.updated_at, sinceId: last.id, limit };
-        continue;
-      }
-
-      if (hasReturningScope(storedMeta.scopes, response.scopes)) return "scopesReturned";
-      const meta: SharedDictionaryMeta = {
-        scopes: response.scopes,
-        contributors: deltaPassContributors(storedMeta.contributors, adderIds, contributors),
-        paused: response.paused,
-      };
-      const result = await api.applySharedDictionaryPull!(workspaceId, {
-        upserts,
-        deletedIds,
-        meta,
-      });
-      this.noteSharedDictionaryChange(result?.changed);
-      writeSharedCursor(key, stored, passStartedAt);
-      return "delta";
-    }
-  }
-
-  private async pullSharedHides(
-    workspaceId: string,
-    snapshot: boolean,
-    authGeneration: number
-  ): Promise<void> {
-    const api = window.electronAPI;
-    const key = sharedHidesCursorKey(workspaceId);
-    const stored = snapshot ? null : readSharedCursor(key);
-    const limit = SHARED_DICTIONARY_PAGE_LIMIT;
-    const toRecord = (hide: CloudSharedHide): SharedDictionaryHideRecord => ({
-      entryId: hide.entry_id,
-      updatedAt: hide.updated_at,
-    });
-
-    if (!stored) {
-      const hidden: SharedDictionaryHideRecord[] = [];
-      let page: SharedDictionaryPage = { limit };
-      let passStartedAt: string | undefined;
-      while (true) {
-        const response = await SharedDictionaryService.hides(workspaceId, page);
-        await assertAuthGenerationCurrent(authGeneration);
-        passStartedAt ??= response.server_time;
-        hidden.push(...response.hides.filter((hide) => !hide.deleted_at).map(toRecord));
-        if (response.hasMore) {
-          const last = response.hides.at(-1);
-          if (!last || (last.updated_at === page.cursor && last.entry_id === page.cursorId)) {
-            throw new Error("Shared dictionary hides snapshot stopped advancing");
-          }
-          page = { cursor: last.updated_at, cursorId: last.entry_id, limit };
-          continue;
-        }
-        const result = await api.replaceSharedDictionaryHides!(workspaceId, hidden);
-        this.noteSharedDictionaryChange(result?.changed);
-        writeSharedCursor(key, null, passStartedAt);
-        return;
-      }
-    }
-
-    let page: SharedDictionaryPage = { since: overlappedSince(stored), limit };
-    let passStartedAt: string | undefined;
-    while (true) {
-      const response = await SharedDictionaryService.hides(workspaceId, page);
-      await assertAuthGenerationCurrent(authGeneration);
-      passStartedAt ??= response.server_time;
-      const result = await api.applySharedDictionaryHides!(workspaceId, {
-        hidden: response.hides.filter((hide) => !hide.deleted_at).map(toRecord),
-        unhidden: response.hides.filter((hide) => hide.deleted_at).map((hide) => hide.entry_id),
-      });
-      this.noteSharedDictionaryChange(result?.changed);
-      const last = response.hides.at(-1);
-      if (!response.hasMore) {
-        writeSharedCursor(key, stored, passStartedAt);
-        return;
-      }
-      if (!last || (last.updated_at === page.since && last.entry_id === page.sinceId)) {
-        throw new Error("Shared dictionary hides delta stopped advancing");
-      }
-      page = { since: last.updated_at, sinceId: last.entry_id, limit };
-    }
-  }
-
   private async syncSnippets(): Promise<void> {
     const api = window.electronAPI;
     const required = [
@@ -6289,229 +5462,6 @@ export class SyncService {
     } catch (err) {
       if (!isAuthContextError(err)) console.error("Snippet pull failed:", err);
       return false;
-    }
-  }
-
-  private async syncSkills(): Promise<void> {
-    const api = window.electronAPI;
-    const required = [
-      "getPendingSkills",
-      "getPendingSkillDeletes",
-      "exportSkillForCloud",
-      "getSkillForCloudMerge",
-      "applySkillFromCloud",
-      "markSkillSynced",
-      "hardDeleteSkill",
-      "queueSkillCloudDelete",
-      "clearSkillCloudId",
-      "broadcastSkillsUpdated",
-    ] as const;
-    const missing = required.filter((name) => typeof api[name] !== "function");
-    if (missing.length > 0) {
-      throw new Error(`Skill IPC bindings missing — preload out of date: ${missing.join(", ")}`);
-    }
-
-    // Unlike snippets, the pull goes first: a skill this computer has never sent meets a copy
-    // of the same name from another device there, and the newer of the two wins. So no such
-    // skill is sent until a pull has compared it. An API from before skills answers 404 on
-    // every skills route: nothing to do there.
-    const pulled = await this.pullSkills();
-    if (pulled === "unsupported" || !this.passIsCurrent()) return;
-    await this.pushPendingSkills(pulled);
-    if (!this.passIsCurrent()) return;
-    await this.pushSkillDeletes();
-  }
-
-  private async pushPendingSkills(pulled: Exclude<SkillPullResult, "unsupported">): Promise<void> {
-    const pending = (await window.electronAPI.getPendingSkills?.()) ?? [];
-    const updates = [];
-    const creates = [];
-    for (const row of pending) {
-      const exported = await window.electronAPI.exportSkillForCloud?.(row.name);
-      // A skill that needs fixing, or is over the backup caps, stays on this computer.
-      if (!exported || "tooLargeToSync" in exported) continue;
-      const entry = {
-        name: row.name,
-        enabled: row.enabled === 1,
-        content_hash: exported.contentHash,
-        files: exported.files,
-        edited_at: normalizeTimestamp(row.updated_at),
-      };
-      if (row.cloud_id) {
-        const switchOnly = exported.contentHash === row.synced_hash;
-        updates.push({ cloudId: row.cloud_id, entry, switchOnly });
-      } else if (pulled !== "failed" && !pulled.unwritten.has(row.name))
-        creates.push({
-          ...entry,
-          client_skill_id: row.client_skill_id,
-          created_at: row.created_at,
-        });
-    }
-
-    for (const { cloudId, entry, switchOnly } of updates) {
-      try {
-        const { name: _name, ...fields } = entry;
-        // Files unchanged here go unsent, so they can't replace a newer copy from another device.
-        const server = await SkillsService.update(
-          cloudId,
-          switchOnly ? { enabled: entry.enabled, edited_at: entry.edited_at } : fields
-        );
-        await window.electronAPI.markSkillSynced?.(
-          entry.name,
-          server.id,
-          server.updated_at,
-          entry.content_hash,
-          entry.enabled
-        );
-      } catch (err) {
-        if (isHttpStatus(err, 404)) {
-          // Purged in the cloud, or deleted there from another device: the next push creates
-          // it again, so the skill comes back.
-          await window.electronAPI.clearSkillCloudId?.(entry.name);
-        } else {
-          console.error("Skill update sync failed:", err);
-        }
-      }
-    }
-
-    for (const batch of skillBatches(creates)) {
-      try {
-        const { created } = await SkillsService.batchCreate(batch);
-        const byName = new Map(created.map((server) => [server.name, server]));
-        for (const local of batch) {
-          const server = byName.get(local.name);
-          if (!server) continue;
-          const result = await window.electronAPI.markSkillSynced?.(
-            local.name,
-            server.id,
-            server.updated_at,
-            local.content_hash,
-            local.enabled
-          );
-          if (result?.changes !== 0) continue;
-          // Edited meanwhile, it is sent again next pass. Uninstalled meanwhile, the copy
-          // that got through must go too, or the next pull would bring it back.
-          const row = await window.electronAPI.getSkillForCloudMerge?.(server);
-          // A lookup that failed can't tell, so the copy is left as it is.
-          if (isSkillLookupFailed(row)) continue;
-          if (!row || row.deleted_at) {
-            await window.electronAPI.queueSkillCloudDelete?.(local.name, server.id);
-          }
-        }
-      } catch (err) {
-        console.error("Skill batch create failed:", err);
-      }
-    }
-  }
-
-  private async pushSkillDeletes(): Promise<void> {
-    const deletes = (await window.electronAPI.getPendingSkillDeletes?.()) ?? [];
-    for (const row of deletes) {
-      if (!row.cloud_id) continue;
-      try {
-        await SkillsService.delete(row.cloud_id);
-        await window.electronAPI.hardDeleteSkill?.(row.name);
-      } catch (err) {
-        if (isHttpStatus(err, 404)) {
-          await window.electronAPI.hardDeleteSkill?.(row.name);
-        } else {
-          console.error("Skill delete sync failed:", err);
-        }
-      }
-    }
-  }
-
-  private async pullSkills(): Promise<SkillPullResult> {
-    let changed = false;
-    try {
-      // Listing rescans the skills folder, so an edit made outside the app since it was last
-      // read is a pending change here, which the cloud's copy doesn't replace.
-      await window.electronAPI.skillsList?.();
-      const since = localStorage.getItem("lastSyncedAt.skills") ?? undefined;
-      const sinceId = localStorage.getItem("lastSyncedAt.skills.id") ?? undefined;
-      // A skill that couldn't be written holds the cursor back, so the next pass tries it again.
-      const unwritten = new Set<string>();
-
-      let cursor: string | undefined = since;
-      let cursorId: string | undefined = sinceId;
-      let maxUpdatedAt = normalizeTimestamp(since);
-      let maxId = sinceId ?? "";
-      const cursorField: keyof Pick<CloudSkillEntry, "created_at" | "updated_at"> = since
-        ? "updated_at"
-        : "created_at";
-
-      while (true) {
-        const { entries, hasMore } = since
-          ? await SkillsService.listDelta(cursor, SKILL_PAGE_SIZE, cursorId)
-          : await SkillsService.listSnapshot(cursor, SKILL_PAGE_SIZE, cursorId);
-        if (entries.length === 0) break;
-
-        for (const cloudEntry of entries) {
-          const cloudTs = normalizeTimestamp(cloudEntry.updated_at);
-          const local = await window.electronAPI.getSkillForCloudMerge?.(cloudEntry);
-          // Comparing with nothing would take the cloud's copy over this one.
-          if (isSkillLookupFailed(local)) throw new Error("Couldn't read a skill on this computer");
-
-          if (cloudTs > maxUpdatedAt) {
-            maxUpdatedAt = cloudTs;
-            maxId = cloudEntry.id;
-          } else if (cloudTs === maxUpdatedAt && cloudEntry.id > maxId) {
-            maxId = cloudEntry.id;
-          }
-
-          // A delete wins, as for snippets, except over a skill this computer has never sent.
-          // A change waiting to be sent wins over the cloud's copy (the push that follows
-          // replaces it); a skill never sent meets the cloud's copy, and the one edited last
-          // wins, by when each device edited it rather than when the cloud received it. A
-          // synced skill whose files differ from the cloud's takes them, since a switch-only
-          // push leaves the files another device sent meanwhile in the cloud only.
-          const pending = local?.sync_status === "pending";
-          const shouldApply = cloudEntry.deleted_at
-            ? !!local && !local.deleted_at && !(pending && !local.cloud_id)
-            : !local ||
-              (pending
-                ? !local.cloud_id &&
-                  normalizeTimestamp(cloudEntry.edited_at) > normalizeTimestamp(local.updated_at)
-                : cloudTs > normalizeTimestamp(local.updated_at) ||
-                  local.cloud_id !== cloudEntry.id ||
-                  local.content_hash !== cloudEntry.content_hash);
-          if (!shouldApply) continue;
-          try {
-            const applied = await window.electronAPI.applySkillFromCloud?.(
-              cloudEntry,
-              local ?? null
-            );
-            if (typeof applied === "object") {
-              throw new Error(`Couldn't write the skill: ${applied.error}`);
-            }
-            if (applied) changed = true;
-          } catch (err) {
-            unwritten.add(cloudEntry.name);
-            console.error("Skill pull could not write a skill:", err);
-          }
-        }
-
-        if (!hasMore) break;
-        const last = entries[entries.length - 1];
-        const nextCursor = last[cursorField];
-        if (nextCursor === cursor && last.id === cursorId) break;
-        cursor = nextCursor;
-        cursorId = last.id;
-      }
-
-      // After a sign-in change mid-pull, the pages came from another account than the cursor's.
-      if (unwritten.size === 0 && this.passIsCurrent()) {
-        if (maxUpdatedAt) localStorage.setItem("lastSyncedAt.skills", maxUpdatedAt);
-        if (maxId) localStorage.setItem("lastSyncedAt.skills.id", maxId);
-      }
-      return { unwritten };
-    } catch (err) {
-      if (isHttpStatus(err, 404)) return "unsupported";
-      console.error("Skill pull failed:", err);
-      return "failed";
-    } finally {
-      // Also after a pull that stopped early: the skills it wrote are on disk already.
-      if (changed) await window.electronAPI.broadcastSkillsUpdated?.();
     }
   }
 
