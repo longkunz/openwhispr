@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { DEFAULT_SELF_HOSTED_STT_URL, DEFAULT_SELF_HOSTED_STT_MODEL } from "../config/constants";
 import { ORUKEET_MODEL } from "../helpers/dictationStreamingRouting";
 import { selfHostedSttHeaderProblem } from "../helpers/selfHostedSttHeaders.js";
 import { useConnectionAutoCheck } from "../hooks/useConnectionAutoCheck";
@@ -88,7 +89,7 @@ export default function SelfHostedPanel({
   }, [check.phase, typedHeaders, followHeaderDraft]);
 
   const placeholderUrl =
-    service === "transcription" ? "http://192.168.1.126:8178" : "http://192.168.1.126:8080";
+    service === "transcription" ? DEFAULT_SELF_HOSTED_STT_URL : "http://192.168.1.126:8080";
 
   return (
     <div
@@ -131,7 +132,9 @@ export default function SelfHostedPanel({
             }
             value={model ?? ""}
             onChange={(e) => onModelChange(e.target.value)}
-            placeholder="Whisper-Large-v3-Turbo"
+            placeholder={
+              service === "transcription" ? DEFAULT_SELF_HOSTED_STT_MODEL : "Whisper-Large-v3-Turbo"
+            }
             autoComplete="off"
             spellCheck={false}
           />

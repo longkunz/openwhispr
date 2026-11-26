@@ -2404,7 +2404,9 @@
         }
       },
       "meetingEnterpriseOnly": "La tua organizzazione consente solo la trascrizione su cloud aziendale, che non copre ancora la registrazione delle riunioni.",
-      "meetingCloudSignedOut": "Le registrazioni delle note non possono avviarsi con OpenWhispr Cloud finché non hai effettuato l'accesso. Scegli un altro motore qui sopra."
+      "meetingCloudSignedOut": "Le registrazioni delle note non possono avviarsi con OpenWhispr Cloud finché non hai effettuato l'accesso. Scegli un altro motore qui sopra.",
+      "vietAsrStreaming": "Streaming VietASR",
+      "vietAsrStreamingDescription": "Mostra le parole mentre parli con un server VietASR. Gli altri server trascrivono dopo la registrazione."
     },
     "intelligence": {
       "gpuDevice": {

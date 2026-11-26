@@ -3159,7 +3159,9 @@
         }
       },
       "meetingEnterpriseOnly": "Your organization only allows enterprise cloud transcription, which does not cover meeting recording yet.",
-      "meetingCloudSignedOut": "Note recordings can't start on OpenWhispr Cloud while you're signed out. Choose another engine above."
+      "meetingCloudSignedOut": "Note recordings can't start on OpenWhispr Cloud while you're signed out. Choose another engine above.",
+      "vietAsrStreaming": "VietASR streaming",
+      "vietAsrStreamingDescription": "Show words as you speak with a VietASR server. Other servers use batch transcription."
     },
     "intelligence": {
       "gpuDevice": {

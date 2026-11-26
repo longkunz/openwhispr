@@ -32,6 +32,7 @@ function policyRefusalKey(snapshot) {
 }
 
 function realtimeSelection(options = {}, provider = options.provider ?? "openai-realtime") {
+  if (provider === "vietasr") return { mode: "self-hosted", provider: "" };
   if (provider === "local") return { mode: "local", provider };
   if (provider === "enterprise-realtime")
     return { mode: "enterprise", provider: options.managedContext?.provider };

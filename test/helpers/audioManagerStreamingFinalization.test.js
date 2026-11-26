@@ -5,6 +5,119 @@ const { WebSocketServer } = require("ws");
 const { OrukeetStreaming } = require("../../src/helpers/orukeetStreaming");
 const { loadAudioManager } = require("./harness/audioManager");
 
+test("VietASR keeps its original endpoint, uses only acknowledged finals, and publishes once", async (t) => {
+  const AudioManager = await loadManagerClass(t);
+  installCapture(t);
+  globalThis.window.dispatchEvent = () => true;
+  for (const scenario of [
+    "final",
+    "silence",
+    "dropped",
+    "start-failed",
+    "cancel-before-ready",
+    "cancel-final",
+  ]) {
+    await t.test(scenario, async () => {
+      globalThis.__streamingFinalizationSettings = {
+        transcriptionMode: "self-hosted",
+        vietAsrStreamingEnabled: true,
+        remoteTranscriptionUrl: "http://127.0.0.1:8000/v1?token=original",
+        remoteTranscriptionModel: "vietasr",
+        preferredLanguage: "vi",
+        selfHostedSttHeaders: { dictation: [{ name: "X-API-Key", value: "original" }] },
+        cloudTranscriptionMode: "byok",
+        useLocalWhisper: false,
+      };
+      let partial;
+      let finishStart;
+      let finishFinal;
+      const started = new Promise((resolve) => {
+        finishStart = resolve;
+      });
+      let startEntered = false;
+      const provider = startingOrukeetProvider({
+        onPartial: (listener) => {
+          partial = listener;
+          return () => {};
+        },
+        start: async () => {
+          startEntered = true;
+          if (scenario === "cancel-before-ready") return started;
+          return { success: scenario !== "start-failed" };
+        },
+        finalize: async () => {
+          if (scenario === "cancel-final")
+            return new Promise((resolve) => {
+              finishFinal = resolve;
+            });
+          return scenario === "dropped" || scenario === "start-failed"
+            ? { success: false, error: "Connection closed" }
+            : { success: true, text: scenario === "silence" ? "" : "Xin chào!" };
+        },
+        stop: async () => {
+          finishStart({ success: false });
+          finishFinal?.({ success: false });
+          return { success: true, text: "unconfirmed stop text", model: "vietasr" };
+        },
+      });
+      const { manager, completions, errors, uploads } = createStartingManager(AudioManager, {
+        providerName: "vietasr",
+        provider,
+      });
+      const batches = [];
+      globalThis.window.electronAPI.proxySelfHostedTranscription = async (data) => {
+        batches.push(data);
+        return { ok: true, bodyText: '{"text":"Batch final"}' };
+      };
+      manager.processTranscription = async (text) => text;
+      manager.finalizeChineseScript = async (text) => text;
+      const start = manager.startStreamingRecording();
+      if (scenario === "cancel-before-ready") {
+        while (!startEntered) await new Promise(setImmediate);
+        await manager.cancelStreamingRecording();
+        await start;
+        assert.deepEqual(completions, []);
+        assert.deepEqual(batches, []);
+        return;
+      }
+      assert.equal(await start, true);
+      partial("partial text must never be pasted");
+      // Mutate both the URL and an existing header row while this recording is active.
+      globalThis.__streamingFinalizationSettings.remoteTranscriptionUrl =
+        "https://other.example/v1";
+      globalThis.__streamingFinalizationSettings.selfHostedSttHeaders.dictation[0].value =
+        "changed";
+      const stop = manager.stopStreamingRecording();
+      if (scenario === "cancel-final") {
+        while (!finishFinal) await new Promise(setImmediate);
+        assert.equal(manager.cancelProcessing(), true);
+        await stop;
+        assert.deepEqual(completions, []);
+        assert.deepEqual(batches, []);
+        return;
+      }
+      await Promise.all([stop, manager.stopStreamingRecording()]);
+      assert.deepEqual(errors, []);
+      assert.deepEqual(uploads, [], "no OpenWhispr Cloud fallback");
+      if (scenario === "silence") {
+        assert.deepEqual(completions, [{ success: true, text: "" }]);
+        assert.deepEqual(batches, []);
+      } else {
+        assert.equal(completions.length, 1);
+        assert.equal(completions[0].text, scenario === "final" ? "Xin chào!" : "Batch final");
+        assert.equal(batches.length, scenario === "final" ? 0 : 1);
+        if (batches.length) {
+          assert.equal(
+            batches[0].endpoint,
+            "http://127.0.0.1:8000/v1/audio/transcriptions?token=original"
+          );
+          assert.equal(batches[0].headers["x-api-key"], "original");
+        }
+      }
+    });
+  }
+});
+
 async function loadManagerClass(t, mockModules) {
   const { AudioManager } = await loadAudioManager(t, {
     cachePrefix: "openwhispr-streaming-finalization-test-",
@@ -1454,7 +1567,7 @@ test("a failed-over upload that reaches the word limit carries it to the upgrade
   );
 });
 
-test("a silent failed-over tap is not uploaded", async (t) => {
+test("a failed-over tap without local speech gating reaches the server for silence detection", async (t) => {
   const AudioManager = await loadManagerClass(t);
   useManagedOrukeetSettings();
   installCapture(t);
@@ -1467,7 +1580,8 @@ test("a silent failed-over tap is not uploaded", async (t) => {
   manager.streamingProcessor.port.onmessage({ data: silentPcm() });
   await manager.stopStreamingRecording();
 
-  assert.deepEqual(uploads, []);
+  // The minimal build removed the local gate; only the server can confirm silence.
+  assert.deepEqual(uploads, [{ audio: "opening words", reason: "session_unavailable" }]);
   assert.deepEqual(errors, []);
   assert.deepEqual(completions, [{ success: true, text: "" }]);
 });

@@ -4,7 +4,11 @@
 // call sites is what broke default dictation in 1.8.2 (#1624: the
 // openai-realtime entry never sent `provider`, and the hardened main-process
 // allowlist rejected undefined). Pure module, mirrors meetingTranscriptionRouting.
-import { isOrukeetStreaming, isSelfHostedTranscription } from "./selfHostedTranscription.js";
+import {
+  isOrukeetStreaming,
+  isSelfHostedTranscription,
+  isVietAsrStreaming,
+} from "./selfHostedTranscription.js";
 import { isStreamingOnlySelection } from "./transcriptionRoute.ts";
 import { registryData as modelRegistryData, subscribeRegistry } from "../models/registryData.js";
 import bundledRegistryData from "../models/modelRegistryData.json" with { type: "json" };
@@ -189,6 +193,7 @@ export function resolveManagedOrukeetRoute({ settings, sttConfig, language }) {
 }
 
 export function resolveStreamingProviderName({ settings, context, sttConfig, language }) {
+  if (context === "dictation" && isVietAsrStreaming(settings)) return "vietasr";
   // The managed rollout must outrank a stale personal model selection. Notes
   // keep their separate provider contract; this endpoint is for dictation.
   if (context === "dictation") {
@@ -229,7 +234,7 @@ export function resolveStreamingProviderName({ settings, context, sttConfig, lan
 // Tinfoil and Corti stream on the user's own credentials in either mode (see
 // realtimeTokenProviders.js), so only the other providers' managed sessions
 // draw on the OpenWhispr Cloud word allowance.
-const OWN_CREDENTIAL_STREAMING_PROVIDERS = new Set(["tinfoil-realtime", "corti"]);
+const OWN_CREDENTIAL_STREAMING_PROVIDERS = new Set(["tinfoil-realtime", "corti", "vietasr"]);
 
 export function isCloudMeteredStream({ provider, mode }) {
   return mode === "openwhispr" && !OWN_CREDENTIAL_STREAMING_PROVIDERS.has(provider);
@@ -257,6 +262,13 @@ export function buildStreamingSessionOptions({
   // assistant voice skips it because the agent window owns that surface.
   if (providerName === "tinfoil-realtime" && !voiceAgentRequested) {
     options.preview = true;
+  }
+  if (providerName === "vietasr") {
+    options.mode = "byok";
+    options.model = settings.remoteTranscriptionModel || "vietasr";
+    options.baseUrl = settings.remoteTranscriptionUrl;
+    options.transcriptionMode = "self-hosted";
+    options.preview = !!settings.showTranscriptionPreview && !voiceAgentRequested;
   }
   if (providerName === "orukeet") {
     options.model = ORUKEET_MODEL;

@@ -31,3 +31,7 @@ export function isOrukeetEndpoint(settings) {
 export function isOrukeetStreaming(settings) {
   return settings?.cloudTranscriptionMode === "byok" && isOrukeetEndpoint(settings);
 }
+
+export function isVietAsrStreaming(settings) {
+  return isSelfHostedTranscription(settings) && settings.vietAsrStreamingEnabled === true;
+}

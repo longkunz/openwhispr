@@ -1,3 +1,4 @@
+const { VietAsrStreaming } = require("./vietAsrStreaming");
 const { parseSelfHostedSttHeaders, selfHostedSttRequest } = require("./selfHostedSttHeaders.js");
 const liveSpeakerIdentifier = {
   isAvailable: () => false,
@@ -10404,10 +10405,11 @@ class IPCHandlers {
     };
 
     const setupDictationCallbacks = (streaming, event) => {
-      const isOrukeet = streaming instanceof OrukeetStreaming;
+      const sessionScoped =
+        streaming instanceof OrukeetStreaming || streaming instanceof VietAsrStreaming;
       const canNotify = () =>
-        !event.sender.isDestroyed?.() && (!isOrukeet || this._dictationStreaming === streaming);
-      if (isOrukeet) {
+        !event.sender.isDestroyed?.() && (!sessionScoped || this._dictationStreaming === streaming);
+      if (sessionScoped) {
         const ownerGone = () => {
           streaming.disconnect().catch(() => {});
           if (this._dictationStreaming === streaming) this._dictationStreaming = null;
@@ -10416,8 +10418,9 @@ class IPCHandlers {
         streaming.onClose = () => event.sender.removeListener?.("destroyed", ownerGone);
       }
       streaming.onPartialTranscript = (text) => {
+        if (!canNotify()) return;
         event.sender.send("dictation-realtime-partial", text);
-        if (this._dictationPreviewEnabled && text) {
+        if (this._dictationPreviewEnabled && (text || streaming instanceof VietAsrStreaming)) {
           this.windowManager.showTranscriptionPreview(text);
         }
       };
@@ -10433,6 +10436,7 @@ class IPCHandlers {
         if (this._dictationPreviewEnabled) this.windowManager.hideTranscriptionPreview();
       };
       streaming.onSessionEnd = (data) => {
+        if (!canNotify()) return;
         event.sender.send("dictation-realtime-session-end", data || {});
         if (this._dictationPreviewEnabled) this.windowManager.hideTranscriptionPreview();
       };
@@ -10541,10 +10545,13 @@ class IPCHandlers {
         const streaming =
           provider === "orukeet"
             ? new OrukeetStreaming(isCloud ? MANAGED_STREAM_OPTIONS : {})
-            : new OpenAIRealtimeStreaming();
+            : provider === "vietasr"
+              ? new VietAsrStreaming()
+              : new OpenAIRealtimeStreaming();
         if (provider === "orukeet")
           streaming.onUsageError = (metadata) =>
             debugLogger.error("Combined cleanup usage could not be recorded", metadata);
+        if (provider === "vietasr") streaming.owner = event.sender;
         setupDictationCallbacks(streaming, event);
         // Assign before the token fetch (a real network round trip) so
         // dictation-realtime-send has a live instance to buffer into instead
@@ -10554,6 +10561,15 @@ class IPCHandlers {
         this._dictationStreaming = streaming;
         ownProductStream(streaming);
         try {
+          if (provider === "vietasr") {
+            if (isCloud || options.transcriptionMode !== "self-hosted")
+              throw new Error("VietASR requires self-hosted dictation");
+            await streaming.connect({
+              baseUrl: options.baseUrl,
+              headers: selfHostedRequest("dictation").headers,
+            });
+            return;
+          }
           if (provider === "orukeet") {
             if (isCloud) {
               await connectManagedOrukeet({
@@ -10605,7 +10621,8 @@ class IPCHandlers {
             });
           }
         } catch (err) {
-          if (provider === "orukeet") await streaming.disconnect().catch(() => {});
+          if (provider === "orukeet" || provider === "vietasr")
+            await streaming.disconnect().catch(() => {});
           if (this._dictationStreaming === streaming) this._dictationStreaming = null;
           throw err;
         }
@@ -11484,6 +11501,7 @@ class IPCHandlers {
 
     let dictationWarmupQueue = Promise.resolve();
     handleRemoteProduct("dictation-realtime-warmup", (event, options = {}) => {
+      if (options.provider === "vietasr") return { success: true };
       const warmup = dictationWarmupQueue
         .then(() => warmupDictationStreaming(event, options))
         .catch(streamingStartFailure);
@@ -11494,7 +11512,7 @@ class IPCHandlers {
     handleRemoteProduct("dictation-realtime-start", async (event, options = {}) => {
       const managedOrukeet = options.provider === "orukeet" && options.mode !== "byok";
       const stopGeneration = dictationStopGeneration;
-      if (managedOrukeet) {
+      if (managedOrukeet || options.provider === "vietasr") {
         dictationRecordingActive = true;
         releaseRecordingWithRenderer(event.sender);
       }
@@ -11515,6 +11533,8 @@ class IPCHandlers {
         ) {
           await connectDictationStreaming(event, options);
         }
+        if (stopGeneration !== dictationStopGeneration)
+          throw new Error("Dictation start was cancelled");
         ownProductStream(this._dictationStreaming);
         return { success: true };
       } catch (err) {
@@ -11523,14 +11543,27 @@ class IPCHandlers {
       }
     });
 
-    ipcMain.on("dictation-realtime-send", (_event, buffer) => {
+    ipcMain.on("dictation-realtime-send", (event, buffer) => {
+      if (
+        this._dictationStreaming instanceof VietAsrStreaming &&
+        this._dictationStreaming.owner !== event.sender
+      )
+        return;
       this._dictationStreaming?.sendAudio(Buffer.from(buffer));
     });
 
-    ipcMain.handle("dictation-realtime-finalize", async () => {
-      if (!(this._dictationStreaming instanceof OrukeetStreaming)) {
-        return { success: false, error: "No Orukeet recording is active" };
+    ipcMain.handle("dictation-realtime-finalize", async (event) => {
+      if (
+        !(this._dictationStreaming instanceof OrukeetStreaming) &&
+        !(this._dictationStreaming instanceof VietAsrStreaming)
+      ) {
+        return { success: false, error: "No acknowledged streaming recording is active" };
       }
+      if (
+        this._dictationStreaming instanceof VietAsrStreaming &&
+        this._dictationStreaming.owner !== event.sender
+      )
+        return { success: false, error: "Recording belongs to another window" };
       try {
         return { success: true, ...(await this._dictationStreaming.finalize()) };
       } catch (error) {
@@ -11538,7 +11571,12 @@ class IPCHandlers {
       }
     });
 
-    ipcMain.handle("dictation-realtime-stop", async () => {
+    ipcMain.handle("dictation-realtime-stop", async (event) => {
+      if (
+        this._dictationStreaming instanceof VietAsrStreaming &&
+        this._dictationStreaming.owner !== event.sender
+      )
+        return { success: false, error: "Recording belongs to another window" };
       dictationStopGeneration += 1;
       dictationRecordingActive = false;
       clearDictationIdleTimer();

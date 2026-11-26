@@ -6055,7 +6055,9 @@
         }
       },
       "meetingEnterpriseOnly": "لا تسمح مؤسستك إلا بالتفريغ عبر السحابة المؤسسية، وهو لا يشمل تسجيل الاجتماعات بعد.",
-      "meetingCloudSignedOut": "لا يمكن بدء تسجيل الملاحظات عبر OpenWhispr Cloud وأنت غير مسجل الدخول. اختر محركًا آخر أعلاه."
+      "meetingCloudSignedOut": "لا يمكن بدء تسجيل الملاحظات عبر OpenWhispr Cloud وأنت غير مسجل الدخول. اختر محركًا آخر أعلاه.",
+      "vietAsrStreaming": "بث VietASR",
+      "vietAsrStreamingDescription": "اعرض الكلمات أثناء التحدث باستخدام خادم VietASR. تستخدم الخوادم الأخرى النسخ بعد التسجيل."
     },
     "intelligence": {
       "gpuDevice": {

@@ -2404,7 +2404,9 @@
         }
       },
       "meetingEnterpriseOnly": "組織はエンタープライズクラウドの文字起こしのみを許可しており、会議の録音にはまだ対応していません。",
-      "meetingCloudSignedOut": "サインアウト中は OpenWhispr Cloud でノート録音を開始できません。上で別のエンジンを選択してください。"
+      "meetingCloudSignedOut": "サインアウト中は OpenWhispr Cloud でノート録音を開始できません。上で別のエンジンを選択してください。",
+      "vietAsrStreaming": "VietASRストリーミング",
+      "vietAsrStreamingDescription": "VietASRサーバーで話しながらテキストを表示します。他のサーバーは録音後に文字起こしします。"
     },
     "intelligence": {
       "gpuDevice": {

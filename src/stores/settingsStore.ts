@@ -6,7 +6,11 @@ import {
 import { RETIRED_TINFOIL_MODEL_NAMES } from "../config/retiredCloudModelPolicy.js";
 import { create } from "zustand";
 import { GENERATE_NOTES_KEY } from "../helpers/builtinActions";
-import { API_ENDPOINTS } from "../config/constants";
+import {
+  API_ENDPOINTS,
+  DEFAULT_SELF_HOSTED_STT_URL,
+  DEFAULT_SELF_HOSTED_STT_MODEL,
+} from "../config/constants";
 import i18n, { normalizeUiLanguage } from "../i18n";
 import { readStoredAccountScopeUserId } from "../lib/authAccountScope";
 import { ensureAgentNameInDictionary } from "../utils/agentName";
@@ -96,11 +100,7 @@ import type {
   ThemeSettings,
   ChatAgentSettings,
 } from "../hooks/useSettings";
-import {
-  getKeytermDictionaryWords,
-  type Snippet,
-  type SharedHintWords,
-} from "../utils/snippets";
+import { getKeytermDictionaryWords, type Snippet, type SharedHintWords } from "../utils/snippets";
 
 export interface ScopedSharedHintWords extends SharedHintWords {
   accountId?: string;
@@ -439,6 +439,7 @@ function initializeAutoUpdatesDefault() {
 initializeAutoUpdatesDefault();
 
 const BOOLEAN_SETTINGS = new Set([
+  "vietAsrStreamingEnabled",
   "useLocalWhisper",
   "meetingUseLocalWhisper",
   "uploadUseLocalWhisper",
@@ -1121,6 +1122,7 @@ export interface SettingsState
   remoteTranscriptionType: SelfHostedType;
   remoteTranscriptionUrl: string;
   remoteTranscriptionModel: string;
+  vietAsrStreamingEnabled: boolean;
   selfHostedSttHeaders: Record<SelfHostedSttSurface, SelfHostedSttHeader[]>;
   cleanupMode: InferenceMode;
   cleanupRemoteUrl: string;
@@ -1242,6 +1244,7 @@ export interface SettingsState
   setRemoteTranscriptionType: (type: SelfHostedType) => void;
   setRemoteTranscriptionUrl: (url: string) => void;
   setRemoteTranscriptionModel: (model: string) => void;
+  setVietAsrStreamingEnabled: (value: boolean) => void;
   setSelfHostedSttHeaders: (surface: SelfHostedSttSurface, headers: SelfHostedSttHeader[]) => void;
   setCleanupMode: (mode: InferenceMode) => void;
   setCleanupRemoteUrl: (url: string) => void;
@@ -1933,8 +1936,9 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     const v = readString("remoteTranscriptionType", "lan");
     return v === "openai-compatible" ? "openai-compatible" : ("lan" as SelfHostedType);
   })(),
-  remoteTranscriptionUrl: readString("remoteTranscriptionUrl", ""),
-  remoteTranscriptionModel: readString("remoteTranscriptionModel", ""),
+  remoteTranscriptionUrl: readString("remoteTranscriptionUrl", DEFAULT_SELF_HOSTED_STT_URL),
+  remoteTranscriptionModel: readString("remoteTranscriptionModel", DEFAULT_SELF_HOSTED_STT_MODEL),
+  vietAsrStreamingEnabled: readBoolean("vietAsrStreamingEnabled", false),
   selfHostedSttHeaders: { dictation: [], upload: [] },
   cleanupMode: (() => {
     const v = readString("cleanupMode", "openwhispr");
@@ -1965,7 +1969,10 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
     const v = readString("meetingRemoteTranscriptionType", "lan");
     return v === "openai-compatible" ? "openai-compatible" : ("lan" as SelfHostedType);
   })(),
-  meetingRemoteTranscriptionUrl: readString("meetingRemoteTranscriptionUrl", ""),
+  meetingRemoteTranscriptionUrl: readString(
+    "meetingRemoteTranscriptionUrl",
+    DEFAULT_SELF_HOSTED_STT_URL
+  ),
 
   uploadTranscriptionMode: "self-hosted" as InferenceMode,
   uploadUseLocalWhisper: readBoolean("uploadUseLocalWhisper", false),
@@ -1977,8 +1984,14 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   uploadCloudTranscriptionModel: readString("uploadCloudTranscriptionModel", ""),
   uploadCloudTranscriptionBaseUrl: readString("uploadCloudTranscriptionBaseUrl", ""),
   uploadCloudTranscriptionMode: readString("uploadCloudTranscriptionMode", ""),
-  uploadRemoteTranscriptionUrl: readString("uploadRemoteTranscriptionUrl", ""),
-  uploadRemoteTranscriptionModel: readString("uploadRemoteTranscriptionModel", ""),
+  uploadRemoteTranscriptionUrl: readString(
+    "uploadRemoteTranscriptionUrl",
+    DEFAULT_SELF_HOSTED_STT_URL
+  ),
+  uploadRemoteTranscriptionModel: readString(
+    "uploadRemoteTranscriptionModel",
+    DEFAULT_SELF_HOSTED_STT_MODEL
+  ),
 
   noteFormattingMode: (() => {
     const v = readString("noteFormattingMode", "openwhispr");
@@ -2036,6 +2049,7 @@ export const useSettingsStore = create<SettingsState>()((set, get) => ({
   ) => void,
   setRemoteTranscriptionUrl: createStringSetter("remoteTranscriptionUrl"),
   setRemoteTranscriptionModel: createStringSetter("remoteTranscriptionModel"),
+  setVietAsrStreamingEnabled: createBooleanSetter("vietAsrStreamingEnabled"),
   setSelfHostedSttHeaders: (surface, headers) => {
     const next = { ...get().selfHostedSttHeaders, [surface]: headers };
     set({ selfHostedSttHeaders: next });
@@ -3630,7 +3644,9 @@ export function getSettings(): SettingsState {
  * pointing at a deleted model fails at inference time with an error the user has
  * no way to act on. Cleared rather than repointed so the picker asks again.
  */
-export function clearMissingLocalModelSelections(_isInstalled: (modelId: string) => boolean): void {}
+export function clearMissingLocalModelSelections(
+  _isInstalled: (modelId: string) => boolean
+): void {}
 
 // Another window may have made this move first; the first one tells the user.
 function moveSelection(storeKey: string, to: string): { alreadyMoved: boolean } {

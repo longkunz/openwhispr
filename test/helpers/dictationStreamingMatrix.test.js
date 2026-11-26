@@ -367,8 +367,8 @@ test("closure: every personal meeting provider has a token entry", async () => {
   const { REALTIME_TOKEN_PROVIDERS } = await loadTokens();
   const { ALLOWED_MEETING_PROVIDERS } = await loadMeeting();
   for (const provider of ALLOWED_MEETING_PROVIDERS) {
-    // Enterprise uses the profile's socket factory, covered by enterpriseAudioTransport.test.js.
-    if (provider === "local" || provider === "enterprise-realtime") continue;
+    // Local/self-hosted routes do not mint cloud tokens; enterprise uses its profile socket.
+    if (["local", "self-hosted", "enterprise-realtime"].includes(provider)) continue;
     assert.equal(
       typeof REALTIME_TOKEN_PROVIDERS[provider],
       "function",

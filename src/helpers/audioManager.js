@@ -1,3 +1,4 @@
+import { buildApiUrl } from "../config/constants";
 import { requestSelfHostedBatch } from "./selfHostedBatchRequest";
 import { refreshEnterpriseIdentityForUse } from "../stores/enterpriseIdentityStore.ts";
 import { selfHostedSttRequest } from "./selfHostedSttHeaders.js";
@@ -9,7 +10,7 @@ import {
 } from "../services/ai/chatRequestBody";
 import logger from "../utils/logger";
 import { assertValidCleanupOutput } from "../utils/cleanupOutput";
-import { isAzureOpenAIEndpoint } from "../utils/urlUtils";
+import { isAzureOpenAIEndpoint, isSecureHttpEndpoint } from "../utils/urlUtils";
 import { withSessionRefresh } from "../lib/auth";
 import { getBaseLanguageCode, getLanguageLabel } from "../utils/languageSupport";
 import { convertToWav, needsWavConversion } from "../utils/audioContainer";
@@ -101,6 +102,7 @@ import { supportsWhisperSegments } from "./uploadTimestamps";
 import { dropNoSpeechSegments } from "./noSpeechSegments";
 import {
   isOrukeetStreaming,
+  isVietAsrStreaming,
   isSelfHostedTranscription,
   resolveSelfHostedTranscriptionModel,
 } from "./selfHostedTranscription";
@@ -528,6 +530,11 @@ const STREAMING_PROVIDERS = {
     finalizeAcknowledged: true,
     finalize: () => window.electronAPI.dictationRealtimeFinalize(),
   },
+  vietasr: {
+    ...makeDictationRealtimeProvider("vietasr"),
+    finalizeAcknowledged: true,
+    finalize: () => window.electronAPI.dictationRealtimeFinalize(),
+  },
   gemini: {
     // The final transcript lands ~500ms after audioStreamEnd (which finalize
     // sends), ~2s at the p95 tail, so the stop sequence waits for it under a
@@ -840,6 +847,7 @@ class AudioManager {
     this._streamingMeteredByCloud = false;
     this._activeStreamingProviderName = null;
     this._activeStreamingConfig = null;
+    this._activeVietAsrSettings = null;
     this._activePipelineOptions = undefined;
     this.streamingFallbackRecorder = null;
     this.streamingFallbackChunks = [];
@@ -1345,6 +1353,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     this._activeStreamingSessionId = null;
     this._activeStreamingProviderName = null;
     this._activeStreamingConfig = null;
+    this._activeVietAsrSettings = null;
     this._activePipelineOptions = undefined;
   }
 
@@ -5263,6 +5272,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     // setups; an error resolution must fail closed on the batch path too.
     if (getManagedTranscriptionResolution()) return false;
 
+    if (isVietAsrStreaming(s)) return true;
     if (isOrukeetStreaming(s)) return Boolean(s.customTranscriptionApiKey);
 
     // Self-hosted transcription is batch HTTP to the user's server, never cloud realtime WS.
@@ -5568,6 +5578,10 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
   // the error the user must see.
   classifyStreamingStartResult(res, { useLocalWhisper }) {
     if (res.success) return res;
+    if (this.getActiveStreamingProviderName() === "vietasr") {
+      this.streamingFallbackReason = "stream_no_final";
+      return { needsFallback: true };
+    }
     if (res.code === "NO_API") return { needsFallback: true };
     if (res.code === "NETWORK_ERROR" && useLocalWhisper) {
       this.onError?.({
@@ -5662,6 +5676,15 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       this._activeStreamingSessionId = sessionId;
       providerName = this.getStreamingProviderName();
       this._activeStreamingProviderName = providerName;
+      if (providerName === "vietasr") {
+        const settings = getSettings();
+        this._activeVietAsrSettings = {
+          remoteTranscriptionUrl: settings.remoteTranscriptionUrl,
+          remoteTranscriptionModel: settings.remoteTranscriptionModel,
+          preferredLanguage: settings.preferredLanguage,
+          headers: (settings.selfHostedSttHeaders?.dictation || []).map((row) => ({ ...row })),
+        };
+      }
       this._activeStreamingConfig = { ...this.sttConfig };
       const ownsSession = () => this._activeStreamingSessionId === sessionId;
       const cancellationGeneration = this._streamingCancellationGeneration;
@@ -5735,11 +5758,12 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         providerName,
         cloudTranscriptionMode: getSettings().cloudTranscriptionMode,
       });
-      const failsOver = Boolean(this.streamingFallbackRecorder) && managedOrukeet;
+      const failsOver =
+        Boolean(this.streamingFallbackRecorder) && (managedOrukeet || providerName === "vietasr");
       // Managed Orukeet cues the user before its session exists, and main can drop
       // what reaches a connection it replaces (a warmup for another route, a failed
       // one, a session retry). So its audio waits here until the session has started.
-      let heldFrames = managedOrukeet ? [] : null;
+      let heldFrames = managedOrukeet || providerName === "vietasr" ? [] : null;
 
       this.streamingProcessor.port.onmessage = (event) => {
         // The worklet posts its remaining PCM followed by a "flushed" sentinel
@@ -5880,7 +5904,10 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         const { useLocalWhisper } = streamingSettings;
         const sessionOptions = buildStreamingSessionOptions({
           providerName,
-          settings: streamingSettings,
+          settings:
+            providerName === "vietasr"
+              ? { ...streamingSettings, ...this._activeVietAsrSettings }
+              : streamingSettings,
           language: this.getEffectiveSttLanguage(streamingSettings),
           keyterms: this.getKeyterms(),
           voiceAgentRequested: this.voiceAgentRequested,
@@ -6106,6 +6133,12 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
     window.electronAPI?.cancelCloudTranscription?.();
     this._activeTranscriptionAbortController?.abort();
     this._activeTranscriptionAbortController = null;
+    if (this._activeStreamingProviderName === "vietasr") {
+      // Cancel can arrive while finalization is awaiting the server's final.
+      void this.getStreamingProvider("vietasr")
+        .stop()
+        .catch(() => {});
+    }
     this.pendingSelectionEdit = null;
     this.pendingAssistantConversation = null;
     this.pendingCleanupFailure = null;
@@ -6147,10 +6180,11 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       // doesn't sit busy until the connect times out.
       if (
         this.streamingStartInProgress &&
-        isManagedOrukeetStream({
-          providerName,
-          cloudTranscriptionMode: getSettings().cloudTranscriptionMode,
-        })
+        (providerName === "vietasr" ||
+          isManagedOrukeetStream({
+            providerName,
+            cloudTranscriptionMode: getSettings().cloudTranscriptionMode,
+          }))
       ) {
         void this.getStreamingProvider(providerName)
           .stop()
@@ -6193,6 +6227,59 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       this.isProcessing = false;
       this.isStreaming = false;
       this.onStateChange?.({ isRecording: false, isProcessing: false, isStreaming: false });
+    }
+  }
+
+  async processVietAsrFallback(audio, wasCancelled) {
+    const settings = this._activeVietAsrSettings;
+    if (!settings || wasCancelled())
+      throw new DOMException("Transcription cancelled", "AbortError");
+    const controller = new AbortController();
+    this._activeTranscriptionAbortController = controller;
+    const checkPolicy = () => {
+      if (
+        !isTranscriptionSelectionAllowed(usePolicyStore.getState(), {
+          mode: "self-hosted",
+          provider: "",
+          model: settings.remoteTranscriptionModel,
+        })
+      )
+        controller.abort();
+    };
+    const unsubscribe = usePolicyStore.subscribe(checkPolicy);
+    try {
+      checkPolicy();
+      const endpoint = buildApiUrl(settings.remoteTranscriptionUrl, "/audio/transcriptions");
+      if (
+        !isSecureHttpEndpoint(endpoint) ||
+        new URL(endpoint).username ||
+        new URL(endpoint).password
+      )
+        throw new Error("Invalid self-hosted endpoint");
+      const language = getBaseLanguageCode(settings.preferredLanguage);
+      const response = await requestSelfHostedBatch({
+        endpoint,
+        audio,
+        fileName: `audio.${audioExtensionForMime(audio.type || "audio/webm")}`,
+        ...selfHostedSttRequest(settings.headers),
+        model: settings.remoteTranscriptionModel || undefined,
+        language: language && language !== "auto" ? language : undefined,
+        signal: controller.signal,
+      });
+      if (response.type === "opaqueredirect") throw new Error("Self-hosted redirect refused");
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      const result = JSON.parse(await response.text());
+      controller.signal.throwIfAborted();
+      if (wasCancelled()) throw new DOMException("Transcription cancelled", "AbortError");
+      const rawText = typeof result.text === "string" ? result.text.trim() : "";
+      if (!rawText)
+        throw Object.assign(new Error("No speech detected"), { code: "NO_SPEECH_DETECTED" });
+      const text = await this.processTranscription(rawText, "vietasr-batch", wasCancelled);
+      return { success: true, text, rawText, source: "vietasr-batch" };
+    } finally {
+      unsubscribe();
+      if (this._activeTranscriptionAbortController === controller)
+        this._activeTranscriptionAbortController = null;
     }
   }
 
@@ -6348,6 +6435,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         this.streamingFinalText = result.text;
       }
       if (!result?.success) {
+        if (providerName === "vietasr") this._streamingFailoverReason ||= "stream_no_final";
         logger.warn("Streaming finalization failed", { error: result?.error }, "streaming");
       }
     } else if (provider.awaitsFinalTranscript) {
@@ -6381,6 +6469,11 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         { textLength: finalText.length },
         "streaming"
       );
+    }
+
+    if (providerName === "vietasr") {
+      // A confirmed empty final is silence. A partial or disconnect text is never authoritative.
+      finalText = finalAcknowledged ? orukeetFinal.text : "";
     }
 
     this.cleanupStreamingListeners(sessionId);
@@ -6744,7 +6837,8 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       (failoverReason ? !failoverSilent : !finalAcknowledged && durationSeconds > 2) &&
       fallbackBlob?.size > 0
     ) {
-      const target = resolveStreamingFallbackTarget(getSettings());
+      const target =
+        providerName === "vietasr" ? "vietasr" : resolveStreamingFallbackTarget(getSettings());
       if (target === "skip") {
         logger.warn(
           "Skipping batch fallback: OpenWhispr Cloud session signed out",
@@ -6761,23 +6855,25 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         try {
           // Cloud records usage server-side via /api/transcribe; BYOK has no metering.
           const batchResult =
-            target === "cloud"
-              ? await this.processWithOpenWhisprCloud(
-                  fallbackBlob,
-                  {
-                    durationSeconds,
-                    analyticsOccurredAt: analyticsOccurredAt.toISOString(),
-                    // The tag feeds the Orukeet rollout's fallback rate; other
-                    // providers still fall back, just untagged. Only managed
-                    // Orukeet fails over, and its reason outlives the cached
-                    // config a refused start drops.
-                    ...(failoverReason || isOrukeetStream
-                      ? { streamingFallbackReason: failoverReason || "stream_no_final" }
-                      : {}),
-                  },
-                  wasCancelled
-                )
-              : await this.processWithOpenAIAPI(fallbackBlob, { durationSeconds }, wasCancelled);
+            target === "vietasr"
+              ? await this.processVietAsrFallback(fallbackBlob, wasCancelled)
+              : target === "cloud"
+                ? await this.processWithOpenWhisprCloud(
+                    fallbackBlob,
+                    {
+                      durationSeconds,
+                      analyticsOccurredAt: analyticsOccurredAt.toISOString(),
+                      // The tag feeds the Orukeet rollout's fallback rate; other
+                      // providers still fall back, just untagged. Only managed
+                      // Orukeet fails over, and its reason outlives the cached
+                      // config a refused start drops.
+                      ...(failoverReason || isOrukeetStream
+                        ? { streamingFallbackReason: failoverReason || "stream_no_final" }
+                        : {}),
+                    },
+                    wasCancelled
+                  )
+                : await this.processWithOpenAIAPI(fallbackBlob, { durationSeconds }, wasCancelled);
           if (wasCancelled()) return true;
           if (batchResult?.text) {
             finalText = batchResult.text;

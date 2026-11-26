@@ -23,6 +23,9 @@ function joinUrlDecorators(path: string, query: string, hash: string): string {
 }
 
 // API Configuration helpers
+export const DEFAULT_SELF_HOSTED_STT_URL = "https://stt.gehihi.dev/v1";
+export const DEFAULT_SELF_HOSTED_STT_MODEL = "vietasr";
+
 export const normalizeBaseUrl = (value?: string | null): string => {
   if (!value) return "";
 

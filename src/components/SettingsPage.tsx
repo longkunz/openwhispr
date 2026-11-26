@@ -182,7 +182,6 @@ import CreateWorkspaceDialog from "./CreateWorkspaceDialog";
 import { formatAmount } from "../utils/formatAmount";
 import { enterpriseProviderName, getTranscriptionProvider } from "../models/ModelRegistry";
 import { useManagedScopeResolution } from "../stores/enterpriseIdentityStore";
-import { supportsLiveTranscriptionPreview } from "../utils/transcriptionPreview";
 
 export type { SettingsSectionType };
 
@@ -278,7 +277,7 @@ interface TranscriptionSectionProps {
   }) => void;
 }
 
-function TranscriptionSection({
+export function TranscriptionSection({
   isSignedIn,
   cloudTranscriptionMode,
   setCloudTranscriptionMode,
@@ -318,6 +317,8 @@ function TranscriptionSection({
     (s) => s.setEnterpriseTranscriptionSetupMode
   );
   const selfHostedHeaders = useSettingsStore((s) => s.selfHostedSttHeaders.dictation);
+  const vietAsrStreamingEnabled = useSettingsStore((s) => s.vietAsrStreamingEnabled);
+  const setVietAsrStreamingEnabled = useSettingsStore((s) => s.setVietAsrStreamingEnabled);
   const setSelfHostedSttHeaders = useSettingsStore((s) => s.setSelfHostedSttHeaders);
 
   useEffect(() => {
@@ -335,7 +336,7 @@ function TranscriptionSection({
     setCloudTranscriptionMode,
   ]);
 
-  const previewAvailable = supportsLiveTranscriptionPreview("self-hosted", false);
+  const previewAvailable = vietAsrStreamingEnabled;
 
   const renderPreviewToggle = () => (
     <SettingsPanel>
@@ -344,7 +345,11 @@ function TranscriptionSection({
           label={t("settingsPage.transcription.transcriptionPreview")}
           description={t("settingsPage.transcription.transcriptionPreviewDescription")}
         >
-          <Toggle checked={showTranscriptionPreview} onChange={setShowTranscriptionPreview} />
+          <Toggle
+            checked={showTranscriptionPreview}
+            onChange={setShowTranscriptionPreview}
+            ariaLabel={t("settingsPage.transcription.transcriptionPreview")}
+          />
         </SettingsRow>
       </SettingsPanelRow>
     </SettingsPanel>
@@ -361,6 +366,23 @@ function TranscriptionSection({
         headers={selfHostedHeaders}
         onHeadersChange={(rows) => setSelfHostedSttHeaders("dictation", rows)}
       />
+      <SettingsPanel>
+        <SettingsPanelRow>
+          <SettingsRow
+            label={t("settingsPage.transcription.vietAsrStreaming", "VietASR streaming")}
+            description={t(
+              "settingsPage.transcription.vietAsrStreamingDescription",
+              "Show words as you speak with a VietASR server. Other servers use batch transcription."
+            )}
+          >
+            <Toggle
+              checked={vietAsrStreamingEnabled}
+              onChange={setVietAsrStreamingEnabled}
+              ariaLabel={t("settingsPage.transcription.vietAsrStreaming", "VietASR streaming")}
+            />
+          </SettingsRow>
+        </SettingsPanelRow>
+      </SettingsPanel>
       {previewAvailable && renderPreviewToggle()}
     </div>
   );

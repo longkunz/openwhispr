@@ -2383,7 +2383,9 @@
         }
       },
       "meetingEnterpriseOnly": "A sua organização só permite transcrição em nuvem corporativa, que ainda não abrange a gravação de reuniões.",
-      "meetingCloudSignedOut": "As gravações de notas não podem começar no OpenWhispr Cloud enquanto você estiver desconectado. Escolha outro motor acima."
+      "meetingCloudSignedOut": "As gravações de notas não podem começar no OpenWhispr Cloud enquanto você estiver desconectado. Escolha outro motor acima.",
+      "vietAsrStreaming": "Streaming VietASR",
+      "vietAsrStreamingDescription": "Mostra as palavras enquanto fala com um servidor VietASR. Outros servidores transcrevem após a gravação."
     },
     "intelligence": {
       "gpuDevice": {

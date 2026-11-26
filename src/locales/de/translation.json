@@ -3159,7 +3159,9 @@
         }
       },
       "meetingEnterpriseOnly": "Ihre Organisation erlaubt nur Unternehmens-Cloud-Transkription, die Besprechungsaufnahmen noch nicht abdeckt.",
-      "meetingCloudSignedOut": "Notizaufnahmen mit OpenWhispr Cloud können nicht starten, solange Sie abgemeldet sind. Wählen Sie oben eine andere Engine."
+      "meetingCloudSignedOut": "Notizaufnahmen mit OpenWhispr Cloud können nicht starten, solange Sie abgemeldet sind. Wählen Sie oben eine andere Engine.",
+      "vietAsrStreaming": "VietASR-Streaming",
+      "vietAsrStreamingDescription": "Zeigt Wörter beim Sprechen mit einem VietASR-Server an. Andere Server transkribieren nach der Aufnahme."
     },
     "intelligence": {
       "gpuDevice": {

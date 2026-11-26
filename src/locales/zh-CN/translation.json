@@ -2404,7 +2404,9 @@
         }
       },
       "meetingEnterpriseOnly": "贵组织仅允许企业云转录，暂不支持会议录音。",
-      "meetingCloudSignedOut": "未登录时，无法使用 OpenWhispr Cloud 开始笔记录音。请在上方选择其他引擎。"
+      "meetingCloudSignedOut": "未登录时，无法使用 OpenWhispr Cloud 开始笔记录音。请在上方选择其他引擎。",
+      "vietAsrStreaming": "VietASR 流式转录",
+      "vietAsrStreamingDescription": "使用 VietASR 服务器时边说边显示文字。其他服务器在录音结束后转录。"
     },
     "intelligence": {
       "gpuDevice": {

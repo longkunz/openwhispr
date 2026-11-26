@@ -95,7 +95,11 @@ test("audio upload has its own self-hosted server", async (t) => {
       const { mod, store } = await load({});
       store.getState().setRemoteTranscriptionUrl(DICTATION_URL);
       store.getState().setRemoteTranscriptionModel(DICTATION_MODEL);
-      // An empty Upload tab must not send uploads to dictation's server.
+      // Defaults stay independent of a changed dictation server; explicitly clearing is respected.
+      assert.equal(resolved(mod, store).remoteTranscriptionUrl, "https://stt.gehihi.dev/v1");
+      assert.equal(resolved(mod, store).remoteTranscriptionModel, "vietasr");
+      store.getState().setUploadRemoteTranscriptionUrl("");
+      store.getState().setUploadRemoteTranscriptionModel("");
       assert.equal(resolved(mod, store).remoteTranscriptionUrl, "");
       assert.equal(resolved(mod, store).remoteTranscriptionModel, "");
 
@@ -135,7 +139,8 @@ test("audio upload has its own self-hosted server", async (t) => {
     const done = await load({ ...LATCHED_SELF_HOSTED, uploadSelfHostedMigrated: "true" });
     assert.equal(storage.getItem("uploadRemoteTranscriptionUrl"), null, "no second copy");
     assert.equal(storage.getItem("uploadRemoteTranscriptionModel"), null, "no second model copy");
-    assert.equal(done.store.getState().uploadRemoteTranscriptionUrl, "");
+    assert.equal(done.store.getState().uploadRemoteTranscriptionUrl, "https://stt.gehihi.dev/v1");
+    assert.equal(done.store.getState().uploadRemoteTranscriptionModel, "vietasr");
 
     await load({});
     assert.equal(storage.getItem("uploadSelfHostedMigrated"), "true", "fresh install latches");
