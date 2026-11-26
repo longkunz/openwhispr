@@ -243,7 +243,10 @@ const getMeetingTranscriptionOptions = () => {
       cortiEnvironment: state.cortiEnvironment,
       cortiTenant: state.cortiTenant,
       keyterms: getKeytermDictionaryWords(state).filter(Boolean),
+      remoteTranscriptionUrl: resolved.remoteTranscriptionUrl || state.remoteTranscriptionUrl,
+      remoteTranscriptionModel: state.remoteTranscriptionModel,
     }),
+    selfHostedHeaders: state.selfHostedSttHeaders?.dictation,
     // A model revoked mid-start stays blank for main to refuse, not the default chosen above.
     ...(state.policyBlockedLocalScopes?.includes("meeting") ? { localModel: "" } : {}),
     enterpriseIdentity,

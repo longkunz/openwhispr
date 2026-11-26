@@ -84,10 +84,7 @@ import { useSettingsStore } from "../../stores/settingsStore";
 import { GENERATE_NOTES_KEY } from "../../helpers/builtinActions";
 import EmbeddedChat, { type EmbeddedChatMode } from "./EmbeddedChat";
 import { useEmbeddedChat } from "../../hooks/useEmbeddedChat";
-import ActionChips from "./ActionChips";
-import ActionPicker from "./ActionPicker";
 import { getActionIcon } from "./actionIcons";
-import TemplatePicker from "./TemplatePicker";
 import {
   getActionCta,
   getActionDescription,
@@ -229,6 +226,8 @@ interface NoteEditorProps {
   isSaving: boolean;
   isRecording: boolean;
   isProcessing: boolean;
+  recordingStartedAt?: number | null;
+  readMicLevel?: () => number;
   recordingAllowed?: boolean;
   onStartRecording: () => void;
   onStopRecording: () => void;
@@ -269,6 +268,8 @@ export default function NoteEditor({
   isSaving,
   isRecording,
   isProcessing,
+  recordingStartedAt,
+  readMicLevel,
   recordingAllowed = true,
   onStartRecording,
   onStopRecording,
@@ -308,16 +309,10 @@ export default function NoteEditor({
   // notes it opens there rather than on an empty "Your notes".
   const opensOnTranscript =
     note.note_type === "upload" && !!note.transcript && !note.content.trim();
-  const defaultViewMode: MeetingViewMode = enhancement
-    ? "enhanced"
-    : opensOnTranscript
-      ? "transcript"
-      : "raw";
+  const defaultViewMode: MeetingViewMode = opensOnTranscript ? "transcript" : "raw";
   const [selectedViewMode, setSelectedViewMode] = useState<MeetingViewMode>(defaultViewMode);
-  // Stored as chosen, clamped on read: AI Summary is the only tab that can stop
-  // rendering, and a tab that no longer renders can never be the current one.
   const viewMode: MeetingViewMode =
-    selectedViewMode === "enhanced" && !enhancement ? "raw" : selectedViewMode;
+    selectedViewMode === "enhanced" ? "raw" : selectedViewMode;
   const [chatMode, setChatMode] = useState<EmbeddedChatMode>("hidden");
   const [chatDraft, setChatDraft] = useState("");
   const closeChat = useCallback(() => {
@@ -527,16 +522,7 @@ export default function NoteEditor({
   }, []);
 
   const hasChatSegments = displaySegments.length > 0;
-  const showSummaryCallout =
-    !!onRunNoteAction &&
-    !!defaultTemplate &&
-    shouldOfferMeetingSummary({
-      isRecording,
-      hasTranscriptSegments: hasNoteMaterial,
-      hasSummary: !!enhancement,
-      canEdit: canEditNote,
-      isProcessingAction: actionProcessingState === "processing",
-    });
+  const showSummaryCallout = false;
 
   const knownSpeakers = useMemo(
     () => buildKnownSpeakers(speakerProfiles, displaySegments, speakerMappings),
@@ -1355,51 +1341,6 @@ export default function NoteEditor({
                   <AlignLeft size={12} />
                   {t("notes.editor.notes")}
                 </button>
-                {enhancement && (
-                  <div
-                    ref={summaryTabRef}
-                    data-segment-button
-                    data-segment-value="enhanced"
-                    className={cn(
-                      "relative z-1 flex items-center",
-                      viewMode === "enhanced"
-                        ? "text-foreground"
-                        : "text-foreground/60 hover:text-foreground/80"
-                    )}
-                  >
-                    <button
-                      onClick={() => setSelectedViewMode("enhanced")}
-                      className={cn(SEGMENT_BUTTON_CLASS, canRunTemplate && "pe-1")}
-                    >
-                      <Sparkles size={12} />
-                      <span className="max-w-32 truncate">{summaryLabel}</span>
-                      {enhancement.isStale && (
-                        <span
-                          className="h-1 w-1 rounded-full bg-amber-400/60"
-                          title={t("notes.editor.staleIndicator")}
-                        />
-                      )}
-                    </button>
-                    {canRunTemplate && noteTemplate && (
-                      <TemplatePicker
-                        templates={templates}
-                        current={noteTemplate}
-                        onRun={(template) => onRunNoteAction?.(template)}
-                        onManage={() => onManageActions?.("template")}
-                        disabled={isActionRunning}
-                        alignTo={summaryTabRef}
-                      >
-                        <button
-                          type="button"
-                          aria-label={t("notes.templates.select")}
-                          className={cn(SEGMENT_BUTTON_CLASS, "ps-1 pe-2")}
-                        >
-                          <ChevronDown size={12} />
-                        </button>
-                      </TemplatePicker>
-                    )}
-                  </div>
-                )}
               </div>
             </div>
             <div className="flex w-full shrink-0 flex-wrap items-center gap-2 @[650px]/note-editor:w-auto">
@@ -1407,6 +1348,8 @@ export default function NoteEditor({
                 <NoteRecordControl
                   isRecording={isRecording}
                   isProcessing={isProcessing}
+                  startedAt={recordingStartedAt}
+                  readLevel={readMicLevel}
                   disabled={!recordingAllowed}
                   disabledReason={t(
                     recordingChoiceRefusal?.messageKey ??
@@ -1590,14 +1533,6 @@ export default function NoteEditor({
                   </Button>
                 )}
               </div>
-            ) : viewMode === "enhanced" && enhancement ? (
-              <RichTextEditor
-                key="enhanced"
-                value={enhancement.content}
-                onChange={handleEnhancedChange}
-                disabled={!canEditNote}
-                mentionPeople={mentionPeople}
-              />
             ) : (
               <RichTextEditor
                 key="raw"
@@ -1647,18 +1582,6 @@ export default function NoteEditor({
             onClickOutside={closeChat}
             chatOpen={chatMode === "floating"}
             floatingPanelRef={floatingChatPanelRef}
-            actionPicker={
-              offersActions &&
-              noteActions.length > 0 && (
-                <ActionPicker
-                  actions={noteActions}
-                  canRun={canRunAction}
-                  onRunAction={runAction}
-                  onManageActions={() => onManageActions?.("action")}
-                />
-              )
-            }
-            actionChips={offersActions && <ActionChips {...chipProps} />}
             slashCommands={actionCommands}
             callout={
               showSummaryCallout &&
@@ -1712,7 +1635,6 @@ export default function NoteEditor({
           activeConversationId={embeddedChat.activeConversationId}
           onSwitchConversation={embeddedChat.switchConversation}
           onNewChat={embeddedChat.startNewChat}
-          actionChips={offersActions && <ActionChips {...chipProps} docked />}
           slashCommands={actionCommands}
         />
       )}

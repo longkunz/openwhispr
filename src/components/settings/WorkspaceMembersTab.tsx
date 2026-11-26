@@ -31,7 +31,7 @@ import { transferReducer } from "../../lib/workspaceTransferFlow";
 import CreateTeamDialog from "../CreateTeamDialog";
 import TeamPaywallDialog from "../workspace/TeamPaywallDialog";
 import { RemoveMembersDialog } from "../workspace/RemoveMembersDialog";
-import { RowCheckbox } from "../dictionary/RowCheckbox";
+import { RowCheckbox } from "../ui/RowCheckbox";
 import { useAddToTeamspace } from "../workspace/AddToTeamspaceMenu";
 import { PeopleAddMenu, useAddPeopleToTeam } from "../workspace/PeopleAddMenu";
 import { SelectionBar } from "../workspace/SelectionBar";

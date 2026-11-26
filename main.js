@@ -293,9 +293,6 @@ const EnvironmentManager = require("./src/helpers/environment");
 const WindowManager = require("./src/helpers/windowManager");
 const DatabaseManager = require("./src/helpers/database");
 const ClipboardManager = require("./src/helpers/clipboard");
-const WhisperManager = require("./src/helpers/whisper");
-const ParakeetManager = require("./src/helpers/parakeet");
-const DiarizationManager = require("./src/helpers/diarization");
 const TrayManager = require("./src/helpers/tray");
 const dockManager = require("./src/helpers/dockManager");
 const autoStart = require("./src/helpers/autoStart");
@@ -304,9 +301,6 @@ const CliBridge = require("./src/helpers/cliBridge");
 const { createRegistryLoader } = require("./src/helpers/registryLoader");
 const { registerRegistryIpc } = require("./src/helpers/registryIpc");
 const { replaceRegistryData, bundledRegistryData } = require("./src/models/registryData.js");
-const { configureInstalledModels, withInstalledModels } = require("./src/helpers/installedModels");
-const { withTrustedDownloads } = require("./src/helpers/registryDownloadTrust");
-const registryTrustedKeys = require("./src/models/registryTrustedKeys.json");
 let registryLoader = null;
 let disposeRegistryIpc = null;
 const UpdateManager = require("./src/updater");
@@ -318,18 +312,6 @@ const TextEditMonitor = require("./src/helpers/textEditMonitor");
 const SelectionManager = require("./src/helpers/selectionManager");
 const { PermissionGuideManager } = require("./src/helpers/permissionGuideManager");
 const { AgentWindowManager } = require("./src/helpers/agentWindowManager");
-const WhisperCudaManager = require("./src/helpers/whisperCudaManager");
-const WhisperVulkanManager = require("./src/helpers/whisperVulkanManager");
-const {
-  migrateLegacyBinDir,
-  detectOrphanedGpuPacks,
-  detectOutdatedGpuPacks,
-} = require("./src/helpers/gpuBinaryManager");
-const { resetWhisperGpuFailureOnUpgrade } = require("./src/helpers/whisperGpuUpgradeReset");
-const GoogleCalendarManager = require("./src/helpers/googleCalendarManager");
-const MicrosoftCalendarManager = require("./src/helpers/microsoftCalendarManager");
-const AppleCalendarManager = require("./src/helpers/appleCalendarManager");
-const CalendarReminderScheduler = require("./src/helpers/calendarReminderScheduler");
 const MeetingProcessDetector = require("./src/helpers/meetingProcessDetector");
 const AudioActivityDetector = require("./src/helpers/audioActivityDetector");
 const {
@@ -350,7 +332,6 @@ const { i18nMain, changeLanguage } = require("./src/helpers/i18nMain");
 const { ensureYdotool } = require("./src/helpers/ensureYdotool");
 const sidecarRegistry = require("./src/helpers/sidecarRegistry");
 const { reapStaleSidecars } = require("./src/helpers/sidecarReaper");
-const { resolvePrewarmModel } = require("./src/helpers/localServerPolicy");
 
 // Manager instances - initialized after app.whenReady()
 let debugLogger = null;
@@ -359,10 +340,6 @@ let windowManager = null;
 let hotkeyManager = null;
 let databaseManager = null;
 let clipboardManager = null;
-let connectorManager = null;
-let whisperManager = null;
-let parakeetManager = null;
-let diarizationManager = null;
 let trayManager = null;
 let updateManager = null;
 let managedDevicePolicy = null;
@@ -372,18 +349,11 @@ let windowsKeyManager = null;
 let linuxKeyManager = null;
 let textEditMonitor = null;
 let selectionManager = null;
-let whisperCudaManager = null;
-let whisperVulkanManager = null;
-let googleCalendarManager = null;
-let microsoftCalendarManager = null;
-let appleCalendarManager = null;
-let calendarReminderScheduler = null;
 let meetingDetectionEngine = null;
 let audioTapManager = null;
 let linuxPortalAudioManager = null;
 let windowsLoopbackAudioManager = null;
 let meetingAecManager = null;
-let semanticSearch = null;
 let ipcHandlers = null;
 let cliBridge = null;
 let globeKeyAlertShown = false;
@@ -393,8 +363,6 @@ let authBridgeServer = null;
 let pendingNoteCloudId = null;
 let pendingNoteRetryTimer = null;
 let pendingNoteRetryCount = 0;
-const WHISPER_WAKE_REWARM_DELAY_MS = 3000;
-let wakeRewarmTimer = null;
 
 function parseAuthBridgePort() {
   const raw = (process.env.OPENWHISPR_AUTH_BRIDGE_PORT || "").trim();
@@ -519,160 +487,6 @@ function initializeCoreManagers() {
   if (bootAccountId) databaseManager.setActiveAccountId(bootAccountId, { atLaunch: true });
   databaseManager.ensureAccountDefaultFolders();
   clipboardManager = new ClipboardManager();
-  const { createConnectorManager } = require("./src/helpers/connectors/connectorManager");
-  const { createPendingActions } = require("./src/helpers/connectors/pendingActions");
-  const { createActionLog } = require("./src/helpers/connectors/actionLog");
-  const { createCredentialStore } = require("./src/helpers/connectors/credentialStore");
-  const { createConnectorCredentials } = require("./src/helpers/connectors/connectorCredentials");
-  const { createConnectors } = require("./src/helpers/connectors/createConnectors");
-  const { createSalesforceNoteReader } = require("./src/helpers/connectors/salesforceNotes");
-  const { runOAuthLoopbackFlow, OAuthFlowError } = require("./src/helpers/oauthLoopbackFlow");
-  const { broadcastToWindows } = require("./src/helpers/windowBroadcast");
-  const { connectorAccountIdFrom } = require("./src/helpers/connectors/connectorIpc");
-  // The same account receipts are filed under (ipcHandlers' getAccountScope):
-  // the one bound to the credential in use. databaseManager's scope doesn't
-  // move when one signed-in token replaces another.
-  const getConnectorAccountScope = () =>
-    accountScopeBinding.resolveActiveAccountScope({
-      ...require("./src/helpers/tokenStore").getState(),
-      binding: accountScopeBinding.read(),
-    });
-  const getConnectorAccountId = connectorAccountIdFrom(getConnectorAccountScope);
-  const connectorCredentials = createConnectorCredentials({
-    store: createCredentialStore({
-      dir: path.join(app.getPath("userData"), "connectors"),
-      secretCrypto: require("./src/helpers/secretCrypto"),
-      logger: debugLogger,
-    }),
-    getAccountId: getConnectorAccountId,
-  });
-  connectorManager = createConnectorManager({
-    connectors: createConnectors({
-      fetch: (url, init) => net.fetch(url, { ...init, useSessionCookies: false }),
-      i18n: i18nMain,
-      runOAuthLoopbackFlow,
-      OAuthFlowError,
-      credentials: connectorCredentials,
-      database: databaseManager,
-      getSalesforceNote: createSalesforceNoteReader({
-        database: databaseManager,
-        getAccountId: getConnectorAccountId,
-      }),
-      logger: debugLogger,
-      env: process.env,
-      openExternal: (url) => require("./src/helpers/externalUrlOpener").openExternalUrl(url),
-      writeClipboard: (text, webContents) => clipboardManager.writeClipboard(text, webContents),
-      // Read only when revoking a Gmail login on the calendar's Google project;
-      // the calendar manager is created below.
-      getGoogleCalendarAccounts: () => googleCalendarManager?.getAccounts() ?? [],
-      broadcast: broadcastToWindows,
-      notifyStatusChanged: () => void connectorManager?.notifyStatusChanged(),
-    }),
-    pendingActions: createPendingActions(),
-    actionLog: createActionLog(databaseManager),
-    logger: debugLogger,
-    getAccountId: getConnectorAccountId,
-    credentials: connectorCredentials,
-    onStatusChanged: (statuses) => broadcastToWindows("connector-status-changed", statuses),
-  });
-  // Pending cards expire in main even when no renderer ever answers them.
-  setInterval(() => connectorManager.sweepExpired(), 60 * 1000).unref();
-  whisperManager = new WhisperManager();
-  if (process.platform !== "darwin") {
-    whisperCudaManager = new WhisperCudaManager();
-    whisperVulkanManager = new WhisperVulkanManager();
-    // Heal installs from before GPU packs got per-pack directories; must run
-    // before startup pre-warm resolves any GPU binary path.
-    const LlamaVulkanManager = require("./src/helpers/llamaVulkanManager");
-    const llamaVulkanManager = new LlamaVulkanManager();
-    const clearedPacks = migrateLegacyBinDir([
-      whisperCudaManager,
-      whisperVulkanManager,
-      llamaVulkanManager,
-    ]);
-    if (clearedPacks.length > 0) {
-      // No window exists yet — persist the notice; the window that shows it
-      // as a toast takes it (#1606, #2554).
-      require("./src/helpers/gpuPackMigrationNotice").record(clearedPacks);
-    }
-    // The 1.8.3 migration deleted lib-carrying packs without recording that
-    // notice, leaving those users on a silent CPU fallback: an enabled flag
-    // with no pack on disk only happens via such data loss. recordOnce gates
-    // each pack to one notice so a dismissed toast doesn't return every launch.
-    const gpuPacks = [
-      {
-        manager: whisperCudaManager,
-        enabledEnvVar: "WHISPER_CUDA_ENABLED",
-        group: "whisper",
-        backend: "cuda",
-      },
-      {
-        manager: whisperVulkanManager,
-        enabledEnvVar: "WHISPER_VULKAN_ENABLED",
-        group: "whisper",
-        backend: "vulkan",
-      },
-      { manager: llamaVulkanManager, enabledEnvVar: "LLAMA_VULKAN_ENABLED" },
-    ];
-    // A pack whose backend failed here and then vanished (a distro launcher
-    // deletes it, #2168) was no loss: drop its flag as a delete would, so no
-    // notice names it, even after an upgrade clears the remembered failure.
-    const failedBackends = WhisperManager.resolveFailedGpuBackends(process.env.WHISPER_GPU_FAILED);
-    for (const { manager, enabledEnvVar, backend } of gpuPacks) {
-      if (
-        failedBackends.includes(backend) &&
-        process.env[enabledEnvVar] === "true" &&
-        !manager.isDownloaded() &&
-        !manager.needsUpdate()
-      ) {
-        delete process.env[enabledEnvVar];
-        environmentManager.removeKeyFromEnvFile(enabledEnvVar).catch((err) => {
-          debugLogger.error("Failed to clear a vanished GPU pack's flag from .env", {
-            key: enabledEnvVar,
-            error: err.message,
-          });
-        });
-      }
-    }
-    const orphanedPacks = detectOrphanedGpuPacks(gpuPacks);
-    if (orphanedPacks.length > 0) {
-      require("./src/helpers/gpuPackMigrationNotice").recordOnce(orphanedPacks);
-    }
-    // A pack an older release installed that this version can't use (#2424)
-    // otherwise looks like a pack that was never downloaded: say so once per
-    // app version, even to a user who already saw the orphan notice for it.
-    // Only whisper packs can be outdated, so only a user on local whisper
-    // (the only mode whose Settings shows the pack) is told.
-    const outdatedPacks = detectOutdatedGpuPacks(gpuPacks);
-    if (outdatedPacks.length > 0) {
-      const whisperInUse = !!process.env.LOCAL_WHISPER_MODEL;
-      debugLogger.info("GPU packs from an older release need re-downloading", {
-        packs: outdatedPacks,
-        notified: whisperInUse,
-      });
-      if (whisperInUse) {
-        require("./src/helpers/gpuPackMigrationNotice").recordOnce(
-          outdatedPacks,
-          `outdated-${app.getVersion()}`
-        );
-      }
-    }
-    // Lets every server start resolve its GPU backend from installed packs
-    whisperManager.setGpuBinaryManagers({ cuda: whisperCudaManager, vulkan: whisperVulkanManager });
-  }
-  parakeetManager = new ParakeetManager();
-  diarizationManager = new DiarizationManager();
-  calendarReminderScheduler = new CalendarReminderScheduler(databaseManager);
-  googleCalendarManager = new GoogleCalendarManager(
-    databaseManager,
-    windowManager,
-    calendarReminderScheduler
-  );
-  microsoftCalendarManager = new MicrosoftCalendarManager(
-    databaseManager,
-    calendarReminderScheduler
-  );
-  appleCalendarManager = new AppleCalendarManager(databaseManager, calendarReminderScheduler);
   const meetingProcessDetector = new MeetingProcessDetector();
   managedDevicePolicy = createManagedDevicePolicy();
   const managedMeetingPolicy = createManagedMeetingPolicy({
@@ -689,7 +503,7 @@ function initializeCoreManagers() {
   });
   meetingAuditLog.recoverInterrupted();
   meetingDetectionEngine = new MeetingDetectionEngine(
-    calendarReminderScheduler,
+    null,
     meetingProcessDetector,
     new AudioActivityDetector(
       // The capture-helper managers are created a few lines below; the provider
@@ -711,7 +525,6 @@ function initializeCoreManagers() {
     }
   );
   windowManager.meetingDetectionEngine = meetingDetectionEngine;
-  calendarReminderScheduler.meetingDetectionEngine = meetingDetectionEngine;
   updateManager = new UpdateManager({
     getPolicy: (options) => ipcHandlers?.getUpdatePolicy?.(options) ?? { success: false },
   });
@@ -746,21 +559,12 @@ function initializeCoreManagers() {
     environmentManager,
     databaseManager,
     clipboardManager,
-    whisperManager,
-    parakeetManager,
-    diarizationManager,
     windowManager,
     updateManager,
     windowsKeyManager,
     linuxKeyManager,
     textEditMonitor,
     selectionManager,
-    whisperCudaManager,
-    whisperVulkanManager,
-    googleCalendarManager,
-    microsoftCalendarManager,
-    appleCalendarManager,
-    connectorManager,
     meetingDetectionEngine,
     managedMeetingPolicy,
     managedDevicePolicy,
@@ -769,24 +573,13 @@ function initializeCoreManagers() {
     linuxPortalAudioManager,
     windowsLoopbackAudioManager,
     meetingAecManager,
-    getSemanticSearch: () => semanticSearch,
     getTrayManager: () => trayManager,
     oauthProtocolRegistered: protocolRegistered,
     oauthProtocol: OAUTH_PROTOCOL,
   });
 }
 
-function registerSidecars() {
-  if (whisperManager) sidecarRegistry.register("whisper", () => whisperManager.stopServer());
-  if (parakeetManager) sidecarRegistry.register("parakeet", () => parakeetManager.stopServer());
-  if (diarizationManager) {
-    sidecarRegistry.register("diarization", () => diarizationManager.shutdown());
-  }
-  const modelManager = require("./src/helpers/modelManagerBridge").default;
-  sidecarRegistry.register("llama", () => modelManager.stopServer());
-  const onnxWorkerClient = require("./src/helpers/onnxWorkerClient");
-  sidecarRegistry.register("onnx", () => onnxWorkerClient.stop());
-}
+function registerSidecars() {}
 
 // Phase 2: Non-critical setup after windows are visible
 function initializeDeferredManagers() {
@@ -833,8 +626,6 @@ function initializeDeferredManagers() {
     });
   }
 
-  ipcHandlers.startPolicyCalendars();
-  appleCalendarManager.start();
   meetingDetectionEngine.start();
 }
 
@@ -1309,7 +1100,6 @@ async function startApp() {
   // Only local signature/cache verification is awaited. Remote refresh starts
   // later, so offline startup and settings migrations see a usable catalog.
   const registryMetadata = require("./src/models/registryMetadata.json");
-  configureInstalledModels(path.join(app.getPath("userData"), "installed-models.json"));
   registryLoader = createRegistryLoader({
     cachePath: path.join(app.getPath("userData"), "model-registry.json"),
     bundledSnapshot: {
@@ -1317,18 +1107,8 @@ async function startApp() {
       manifestVersion: registryMetadata.manifestVersion,
     },
     clientContract: registryMetadata.clientContract,
-    trustedKeys: registryTrustedKeys,
     appVersion: app.getVersion(),
-    applySnapshot: (snapshot) =>
-      replaceRegistryData({
-        ...snapshot,
-        // Installed records pass the same download checks as the catalog.
-        data: withTrustedDownloads(
-          withInstalledModels(snapshot.data, app.getVersion()),
-          bundledRegistryData,
-          (id) => debugLogger.warn("Refused a catalog download from an untrusted source", { id })
-        ),
-      }),
+    applySnapshot: (snapshot) => replaceRegistryData(snapshot),
     onError: (error) =>
       debugLogger.warn("Model registry update unavailable", { error: error.message }),
   });
@@ -1350,9 +1130,6 @@ async function startApp() {
   const effectivePolicyReady = ipcHandlers.refreshEffectivePolicy();
   if (managedDevicePolicy.getSnapshot().localOnly) await effectivePolicyReady;
   await environmentManager.init();
-  // After any upgrade the GPU gets one fresh attempt: clear the remembered
-  // failure before the whisper pre-warm below resolves its GPU backend.
-  resetWhisperGpuFailureOnUpgrade(environmentManager);
   registerSidecars();
   startAuthBridgeServer();
 
@@ -1424,8 +1201,7 @@ async function startApp() {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  windowManager.onDictationStateChanged = (state, voiceAgentRequested) => {
-    ipcHandlers.dictationCleanupPrewarm.setLifecycleState(state, voiceAgentRequested);
+  windowManager.onDictationStateChanged = () => {
     trayManager?.updateTrayMenu();
   };
 
@@ -1575,101 +1351,17 @@ async function startApp() {
 
   app.on("browser-window-focus", () => {
     managedDevicePolicy.refreshOnFocus();
-    if (googleCalendarManager) googleCalendarManager.syncOnFocus();
-    if (microsoftCalendarManager) microsoftCalendarManager.syncOnFocus();
-    if (appleCalendarManager) appleCalendarManager.syncOnFocus();
   });
 
   const { powerMonitor } = require("electron");
   powerMonitor.on("resume", () => {
     void managedDevicePolicy.refresh();
-    if (calendarReminderScheduler) calendarReminderScheduler.onWakeFromSleep();
-    if (googleCalendarManager) {
-      googleCalendarManager.onWakeFromSleep();
-    }
-    if (microsoftCalendarManager) microsoftCalendarManager.onWakeFromSleep();
-    if (appleCalendarManager) appleCalendarManager.onWakeFromSleep();
-    // Sleep evicts the local GPU model from VRAM; reload it once the driver settles. See #766.
-    // A GPU retry left over from the last wake would fire before then.
-    whisperManager?.cancelWakeGpuRetry();
-    if (wakeRewarmTimer) clearTimeout(wakeRewarmTimer);
-    wakeRewarmTimer = setTimeout(() => {
-      wakeRewarmTimer = null;
-      whisperManager?.onWakeFromSleep().catch((err) => {
-        debugLogger.debug("whisper wake re-warm error (non-fatal)", { error: err.message });
-      });
-    }, WHISPER_WAKE_REWARM_DELAY_MS);
   });
-
-  // Non-blocking server pre-warming; GPU backend resolved by the manager
-  const whisperSettings = {
-    localTranscriptionProvider: process.env.LOCAL_TRANSCRIPTION_PROVIDER || "",
-    whisperModel: process.env.LOCAL_WHISPER_MODEL,
-  };
-  whisperManager.initializeAtStartup(whisperSettings).catch((err) => {
-    debugLogger.debug("Whisper startup init error (non-fatal)", { error: err.message });
-  });
-
-  const parakeetSettings = {
-    localTranscriptionProvider: process.env.LOCAL_TRANSCRIPTION_PROVIDER || "",
-    parakeetModel: process.env.PARAKEET_MODEL,
-    language: process.env.DICTATION_LANGUAGE,
-  };
-  parakeetManager.initializeAtStartup(parakeetSettings).catch((err) => {
-    debugLogger.debug("Parakeet startup init error (non-fatal)", { error: err.message });
-  });
-
-  // TODO: drop legacy REASONING_PROVIDER / LOCAL_REASONING_MODEL fallbacks after 2 releases.
-  const cleanupProvider = process.env.CLEANUP_PROVIDER || process.env.REASONING_PROVIDER;
-  const cleanupLocalModel = process.env.LOCAL_CLEANUP_MODEL || process.env.LOCAL_REASONING_MODEL;
-  const prewarmModel = resolvePrewarmModel({
-    cleanupProvider,
-    cleanupModel: cleanupLocalModel,
-    dictationAgentProvider: process.env.DICTATION_AGENT_PROVIDER,
-    dictationAgentModel: process.env.LOCAL_DICTATION_AGENT_MODEL,
-  });
-  if (prewarmModel) {
-    const modelManager = require("./src/helpers/modelManagerBridge").default;
-    modelManager.prewarmServer(prewarmModel).catch((err) => {
-      debugLogger.debug("llama-server pre-warm error (non-fatal)", {
-        model: prewarmModel,
-        error: err.message,
-      });
-    });
-  }
-
-  // Auto-download diarization models if binary is available
-  if (
-    diarizationManager.getBinaryPath() &&
-    (!diarizationManager.isModelDownloaded() || !diarizationManager.isVadModelDownloaded())
-  ) {
-    diarizationManager.downloadModels().catch((err) => {
-      debugLogger.debug("Diarization model auto-download error (non-fatal)", {
-        error: err.message,
-      });
-    });
-  }
-
-  const QdrantManager = require("./src/helpers/qdrantManager");
-  const SemanticSearchLifecycle = require("./src/helpers/semanticSearchLifecycle");
-  const localEmbeddings = require("./src/helpers/localEmbeddings");
-  const qdrantManager = new QdrantManager();
-  semanticSearch = new SemanticSearchLifecycle({
-    qdrant: qdrantManager,
-    vectorIndex: require("./src/helpers/vectorIndex"),
-    embeddings: localEmbeddings,
-    noteEmbedText: localEmbeddings.LocalEmbeddings.noteEmbedText,
-    database: databaseManager,
-    logger: debugLogger,
-  });
-  sidecarRegistry.register("qdrant", () => semanticSearch.stop());
 
   trayManager.setWindows(windowManager.mainWindow, windowManager.controlPanelWindow);
   trayManager.setWindowManager(windowManager);
   trayManager.setCreateControlPanelCallback(() => windowManager.createControlPanelWindow());
   await trayManager.createTray();
-
-  updateManager.checkForUpdatesOnStartup();
 
   if (process.platform === "darwin") {
     const { isGlobeLikeHotkey, isMouseButtonHotkey } = require("./src/helpers/hotkeyManager");
@@ -2340,11 +2032,6 @@ function performSyncTeardown() {
   registryLoader?.stop();
   disposeRegistryIpc?.();
   disposeRegistryIpc = null;
-  if (wakeRewarmTimer) {
-    clearTimeout(wakeRewarmTimer);
-    wakeRewarmTimer = null;
-  }
-  whisperManager?.cancelWakeGpuRetry();
   clearPendingNoteDeepLink();
   if (authBridgeServer) {
     authBridgeServer.close();
@@ -2363,10 +2050,6 @@ function performSyncTeardown() {
   if (windowsKeyManager) windowsKeyManager.stop();
   if (linuxKeyManager) linuxKeyManager.stop();
   if (meetingDetectionEngine) meetingDetectionEngine.stop();
-  if (googleCalendarManager) googleCalendarManager.stop();
-  if (microsoftCalendarManager) microsoftCalendarManager.stop();
-  if (appleCalendarManager) appleCalendarManager.stop();
-  if (calendarReminderScheduler) calendarReminderScheduler.stop();
   if (audioTapManager) audioTapManager.stop().catch(() => {});
   if (linuxPortalAudioManager) linuxPortalAudioManager.stop().catch(() => {});
   if (windowsLoopbackAudioManager) windowsLoopbackAudioManager.stop().catch(() => {});

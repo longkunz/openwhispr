@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Check, ChevronLeft, Loader2, Unlink } from "../icons";
-import { CALENDAR_LOOKBACK_DAYS } from "../../helpers/calendarCacheWindow";
+const CALENDAR_LOOKBACK_DAYS = 7;
 import { useUiLocale } from "../../hooks/useUiLocale";
 import { formatEventWhen } from "../../utils/dateFormatting";
 import {

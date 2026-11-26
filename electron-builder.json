@@ -28,7 +28,6 @@
     "src/locales/**/*",
     "src/hooks/**/*",
     "src/models/**/*",
-    "src/services/localReasoningBridge.js",
     "src/services/transcriptionBaseUrl.ts",
     "src/stores/policyRules.ts",
     "src/types/**/*",
@@ -95,9 +94,7 @@
     "**/node_modules/ffmpeg-static/**/*",
     "**/node_modules/ps-list/**/*",
     "**/node_modules/better-sqlite3/**/*",
-    "**/node_modules/onnxruntime-node/**/*",
-    "**/node_modules/@napi-rs/keyring/**/*",
-    "src/workers/**/*"
+    "**/node_modules/@napi-rs/keyring/**/*"
   ],
   "extraResources": [
     ".env",
@@ -110,18 +107,12 @@
       "from": "resources/bin/",
       "to": "bin/",
       "filter": [
-        "whisper-cpp-*",
-        "whisper-server-*",
-        "llama-server-*",
-        "sherpa-onnx-*",
         "yt-dlp-*",
-        "qdrant-*",
         "macos-audio-tap",
         "macos-globe-listener",
         "macos-fast-paste",
         "macos-mic-listener",
         "macos-managed-policy",
-        "macos-calendar-listener",
         "macos-text-monitor",
         "macos-window-bounds",
         "macos-media-remote",
@@ -136,9 +127,6 @@
         "windows-system-audio-helper*",
         "windows-text-monitor*",
         "windows-fast-paste*",
-        "all-MiniLM-L6-v2/**/*",
-        "diarization-models/**/*",
-        "whisper-vad/**/*",
         "*.dylib",
         "*.dll",
         "*.so*"

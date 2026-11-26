@@ -1,4 +1,4 @@
-import type { CalendarAttendee } from "./calendar";
+﻿import type { CalendarAttendee } from "./calendar";
 export type ConnectorPolicyState = "allowed" | "blocked" | "unavailable" | "signed_out";
 
 export type ConnectorCancelReason = "cancelled_by_user" | "conversation_ended" | "expired";

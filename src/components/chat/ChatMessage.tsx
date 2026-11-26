@@ -34,10 +34,7 @@ import { InteractionCard, InteractionOutcomeRow } from "./InteractionCard";
 import { ApiKeySavedRow } from "./interactions/ApiKeyCard";
 import { approvalKey, useConnectorApprovalStore } from "../../stores/connectorApprovalStore";
 import { useAgentInteractionStore } from "../../stores/agentInteractionStore";
-import { SkillApprovalCard, SkillCardSummary } from "./SkillApprovalCard";
-import { readSkillCardRecord } from "./skillCardRecord";
 import { CodeBlockActions } from "./CodeBlockActions";
-import { useSkillApprovalStore } from "../../stores/skillApprovalStore";
 
 // Module-level, so the markdown keeps the same callback from render to render.
 const copyCodeBlock = (code: string) => <CodeBlockActions code={code} />;
@@ -175,7 +172,6 @@ function useToolCallCard(
   const key = approvalKey(messageId, toolCall.id);
   const approval = useConnectorApprovalStore((state) => state.entries[key]);
   const interaction = useAgentInteractionStore((state) => state.entries[key]);
-  const skillApproval = useSkillApprovalStore((state) => state.entries[key]);
   const receiptRef = useRef<HTMLDivElement>(null);
   const ownedFocusRef = useRef(false);
   useLayoutEffect(() => {
@@ -190,9 +186,7 @@ function useToolCallCard(
   }, [interaction?.state]);
   if (!interaction) {
     if (approval) return <ApprovalCard entry={approval} />;
-    if (skillApproval) return <SkillApprovalCard entry={skillApproval} />;
-    const skillRecord = readSkillCardRecord(toolCall);
-    return skillRecord ? <SkillCardSummary record={skillRecord} /> : null;
+    return null;
   }
   let card: ReactElement;
   // An open question goes first: after Retry, the Slack picker waits under the

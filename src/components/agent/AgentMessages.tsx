@@ -31,8 +31,6 @@ import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { useCopyFeedback } from "../../hooks/useCopyFeedback";
 import { approvalKey, useConnectorApprovalStore } from "../../stores/connectorApprovalStore";
 import { useAgentInteractionStore } from "../../stores/agentInteractionStore";
-import { useSkillApprovalStore } from "../../stores/skillApprovalStore";
-import { readSkillCardRecord } from "../chat/skillCardRecord";
 import { openProviderSettings } from "../../utils/describeProviderError";
 import { getSelectionInside } from "../../utils/assistantSelection";
 import { AgentProgressRow } from "./AgentProgressRow";
@@ -153,8 +151,7 @@ function useStepsWithCards(messageId: string, steps: ToolCallInfo[]): Set<string
       .join("\n");
   const approvals = useConnectorApprovalStore((state) => withCards(state.entries));
   const interactions = useAgentInteractionStore((state) => withCards(state.entries));
-  const skills = useSkillApprovalStore((state) => withCards(state.entries));
-  return new Set(`${approvals}\n${interactions}\n${skills}`.split("\n").filter(Boolean));
+  return new Set(`${approvals}\n${interactions}`.split("\n").filter(Boolean));
 }
 
 type AnswerPart = { step: ToolCallInfo } | { text: string; start: number };
@@ -191,7 +188,7 @@ const AssistantMessage = memo(function AssistantMessage(props: AssistantMessageP
   const withCards = useStepsWithCards(message.id, steps);
   const parts = answerParts(
     message,
-    steps.filter((step) => withCards.has(step.id) || readSkillCardRecord(step))
+    steps.filter((step) => withCards.has(step.id))
   );
   return (
     <div data-agent-message={message.id} className="flex flex-col gap-2">

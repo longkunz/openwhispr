@@ -1,4 +1,4 @@
-import type { TranscriptSegment } from "../stores/meetingRecordingStore";
+﻿import type { TranscriptSegment } from "../stores/meetingRecordingStore";
 import { mergeTranscriptSegments, type SplitLiveSpeakers } from "./transcriptSpeakerState";
 
 // Routing rules for meeting-diarization-complete events (issue #1495): a result

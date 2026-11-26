@@ -28,7 +28,7 @@ import { useWorkspaceStore } from "../../stores/workspaceStore";
 import type { Workspace, WorkspaceInvitation } from "../../types/electron";
 import { CancelInvitationDialog } from "../workspace/CancelInvitationDialog";
 import { CancelInvitationsDialog } from "../workspace/CancelInvitationsDialog";
-import { RowCheckbox } from "../dictionary/RowCheckbox";
+import { RowCheckbox } from "../ui/RowCheckbox";
 import { SelectionBar } from "../workspace/SelectionBar";
 import type { WorkspaceInvitationsState } from "./useWorkspaceInvitations";
 import { COLUMN_DIVIDER, HEADER_CELL, ROW_DIVIDER, TABLE_FRAME } from "./tableTokens";

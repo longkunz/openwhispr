@@ -39,36 +39,6 @@ import type {
   NoteAttendee,
   NoteAttendeesRequest,
 } from "./connectors";
-import type {
-  CloudSkillEntry,
-  CloudSkillMeta,
-  SkillCloudExport,
-  SkillCommitResult,
-  SkillCreateInput,
-  SkillDetail,
-  SkillForModel,
-  SkillInvalidRequest,
-  SkillProposal,
-  SkillProposalCheck,
-  SkillRef,
-  SkillSaveResult,
-  SkillSummary,
-  SkillSyncRow,
-  SkillSyncUnavailable,
-  SkillUpdate,
-  SkillUploadItem,
-  SkillUploadPreview,
-  SkillWriteError,
-} from "./skills";
-import type {
-  CloudSharedEntry,
-  SharedDictionaryHideRecord,
-  SharedDictionaryMeta,
-  SharedDictionarySnapshot,
-} from "./sharedDictionary";
-import type { ScopedSharedHintWords, SharedHintWords } from "../utils/sharedDictionaryHints";
-
-export type { SharedDictionarySnapshot } from "./sharedDictionary";
 
 export type LocalTranscriptionProvider = "whisper" | "nvidia" | "cohere";
 
@@ -2125,52 +2095,6 @@ declare global {
       onSnippetsUpdated?: (
         callback: (snippets: Array<{ trigger: string; replacement: string }>) => void
       ) => () => void;
-      skillsList?: () => Promise<{ skills: SkillSummary[] }>;
-      skillsGet?: (name: string) => Promise<SkillDetail | null>;
-      /** A text file inside the skill, or null for anything else. */
-      skillsReadFile?: (name: string, path: string) => Promise<{ text: string } | null>;
-      skillsSetEnabled?: (
-        name: string,
-        enabled: boolean
-      ) => Promise<{ ok: true } | SkillInvalidRequest>;
-      skillsUninstall?: (
-        name: string
-      ) => Promise<{ ok: true } | { ok: false; error: SkillWriteError } | SkillInvalidRequest>;
-      skillsReveal?: (name: string) => Promise<{ ok: boolean }>;
-      skillsPreviewUpload?: (
-        items: SkillUploadItem[]
-      ) => Promise<{ items: SkillUploadPreview[] } | SkillInvalidRequest>;
-      skillsCommitUpload?: (request: {
-        tokens: string[];
-        replace: string[];
-      }) => Promise<SkillCommitResult | SkillInvalidRequest>;
-      /** Frees previewed uploads that will not be installed. */
-      skillsDiscardUploads?: (tokens: string[]) => Promise<{ ok: true } | SkillInvalidRequest>;
-      skillsCreate?: (input: SkillCreateInput) => Promise<SkillSaveResult>;
-      skillsAddRecommended?: (
-        id: string,
-        copy: { title: string; description: string }
-      ) => Promise<SkillSaveResult>;
-      /** The built-in creator, or a skill that is on and valid; null for anything else. */
-      skillsReadForModel?: (
-        ref: SkillRef & { file?: string; withFiles?: boolean }
-      ) => Promise<SkillForModel | null>;
-      skillsCheckProposal?: (
-        request:
-          { kind: "create"; proposal: SkillProposal } | { kind: "update"; update: SkillUpdate }
-      ) => Promise<SkillProposalCheck | SkillInvalidRequest>;
-      skillsSaveProposal?: (proposal: SkillProposal) => Promise<SkillSaveResult>;
-      skillsApplyUpdate?: (update: SkillUpdate) => Promise<SkillSaveResult>;
-      skillsMarkUsed?: (name: string) => Promise<void>;
-      /** Puts back the copy a save or update kept, then forgets it. */
-      skillsUndo?: (
-        name: string,
-        versionId: string
-      ) => Promise<{ ok: true } | { ok: false; error: SkillWriteError } | SkillInvalidRequest>;
-      onSkillsChanged?: (callback: () => void) => () => void;
-      setAutoLearnEnabled?: (enabled: boolean) => void;
-      onCorrectionsLearned?: (callback: (words: string[]) => void) => () => void;
-      undoLearnedCorrections?: (words: string[]) => Promise<{ success: boolean }>;
 
       // Note operations
       saveNote: (
@@ -3042,6 +2966,33 @@ declare global {
         language?: string;
         prompt?: string;
       }) => Promise<ProxyTranscriptionResult>;
+      cancelSelfHostedTranscription?: (requestId: string) => void;
+      proxySelfHostedTranscription?: (data: {
+        requestId: string;
+        endpoint: string;
+        headers?: Record<string, string>;
+        redirect?: "error" | "follow";
+        audioBuffer: ArrayBuffer;
+        fileName: string;
+        mimeType: string;
+        model?: string;
+        language?: string;
+        prompt?: string;
+      }) => Promise<{
+        ok?: boolean;
+        status?: number;
+        statusText?: string;
+        contentType?: string;
+        headers?: Record<string, string>;
+        bodyText?: string;
+        redirected?: boolean;
+        fetchError?: {
+          message?: string;
+          name?: string;
+          code?: string;
+          causeCode?: string;
+        };
+      }>;
       getDeepgramKey?: () => Promise<string | null>;
       saveDeepgramKey?: (key: string) => Promise<void>;
       getAssemblyAIKey?: () => Promise<string | null>;
@@ -4715,34 +4666,6 @@ declare global {
         options: { expectedAuthGeneration: number | null }
       ) => Promise<{ revived: string[]; stale?: boolean }>;
 
-      getSharedDictionary?: (workspaceId: string) => Promise<SharedDictionarySnapshot>;
-      applySharedDictionaryPull?: (
-        workspaceId: string,
-        change: { upserts: CloudSharedEntry[]; deletedIds: string[]; meta?: SharedDictionaryMeta }
-      ) => Promise<{ changed: number }>;
-      /** Snapshot write: the workspace's entries become exactly `full.entries`. */
-      replaceSharedDictionary?: (
-        workspaceId: string,
-        full: { entries: CloudSharedEntry[]; meta: SharedDictionaryMeta }
-      ) => Promise<{ changed: number }>;
-      applySharedDictionaryHides?: (
-        workspaceId: string,
-        change: { hidden: SharedDictionaryHideRecord[]; unhidden: string[] }
-      ) => Promise<{ changed: number }>;
-      replaceSharedDictionaryHides?: (
-        workspaceId: string,
-        hidden: SharedDictionaryHideRecord[]
-      ) => Promise<{ changed: number }>;
-      /** With no workspace, clears every workspace's shared words. `changed` counts rows removed. */
-      clearSharedDictionary?: (workspaceId?: string) => Promise<{ changed: number }>;
-      /** Clears every workspace's shared words except these workspaces'. */
-      pruneSharedDictionary?: (keepWorkspaceIds: string[]) => Promise<{ changed: number }>;
-      /** Sends capped prompt hints for auto-learn and eligible shared hints for local hotwords. */
-      setSharedDictionaryHints?: (
-        promptHints: SharedHintWords,
-        hotwordHints: ScopedSharedHintWords
-      ) => Promise<void>;
-
       getPendingSnippets?: () => Promise<SnippetEntryItem[]>;
       getPendingSnippetDeletes?: () => Promise<SnippetEntryItem[]>;
       getSnippetForCloudMerge?: (
@@ -4775,32 +4698,6 @@ declare global {
         expectedAuthGeneration: number
       ) => Promise<{ success: boolean } | StaleSyncWrite>;
       broadcastSnippetsUpdated?: () => Promise<{ success: boolean }>;
-
-      getPendingSkills?: () => Promise<SkillSyncRow[]>;
-      getPendingSkillDeletes?: () => Promise<SkillSyncRow[]>;
-      exportSkillForCloud?: (name: string) => Promise<SkillCloudExport>;
-      getSkillForCloudMerge?: (
-        cloudEntry: CloudSkillMeta
-      ) => Promise<SkillSyncRow | null | SkillSyncUnavailable>;
-      /** False when the entry was skipped for good; a failed write answers why. */
-      applySkillFromCloud?: (
-        cloudEntry: CloudSkillEntry,
-        expectedLocal: SkillSyncRow | null
-      ) => Promise<boolean | { ok: false; error: SkillWriteError }>;
-      markSkillSynced?: (
-        name: string,
-        cloudId: string,
-        serverUpdatedAt: string | undefined,
-        expectedHash: string,
-        expectedEnabled: boolean
-      ) => Promise<{ success: boolean; changes: number } | null>;
-      hardDeleteSkill?: (name: string) => Promise<{ success: boolean } | null>;
-      queueSkillCloudDelete?: (
-        name: string,
-        cloudId: string
-      ) => Promise<{ success: boolean } | null>;
-      clearSkillCloudId?: (name: string) => Promise<{ success: boolean } | null>;
-      broadcastSkillsUpdated?: () => Promise<void>;
     };
 
     api?: {

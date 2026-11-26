@@ -1,6 +1,5 @@
 import type { AssistantTurn, AssistantTurnStatus, Message, ToolCallInfo } from "./types";
 import type { AgentConversationWithMessages, AgentMessageRow } from "../../types/electron";
-import { withoutSkillCardDrafts } from "./skillCardRecord";
 import { connectsFirst } from "./historyMessages";
 import logger from "../../utils/logger";
 
@@ -110,7 +109,7 @@ export function replyMetadata(
 ): Record<string, unknown> | undefined {
   return toolCalls?.length || turn
     ? {
-        ...(toolCalls?.length ? { toolCalls: withoutSkillCardDrafts(toolCalls) } : {}),
+        ...(toolCalls?.length ? { toolCalls } : {}),
         ...(turn ? { turn } : {}),
       }
     : undefined;

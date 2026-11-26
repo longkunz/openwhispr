@@ -1,6 +1,11 @@
 import { dictionaryWordKey } from "./dictionaryWordKey";
 export { dictionaryWordKey } from "./dictionaryWordKey";
-import type { SharedHintWords } from "./sharedDictionaryHints";
+
+export interface SharedHintWords {
+  space: string[];
+  workspace: string[];
+  suppressedPersonal?: string[];
+}
 
 export interface Snippet {
   trigger: string;

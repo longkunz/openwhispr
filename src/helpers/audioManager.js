@@ -1,3 +1,4 @@
+import { requestSelfHostedBatch } from "./selfHostedBatchRequest";
 import { refreshEnterpriseIdentityForUse } from "../stores/enterpriseIdentityStore.ts";
 import { selfHostedSttRequest } from "./selfHostedSttHeaders.js";
 import i18n from "../i18n";
@@ -18,12 +19,10 @@ import {
   resolveChineseScriptTarget,
   resolveCleanupLanguage,
 } from "../utils/chineseScript";
-import {
-  createLocalSpeechGateState,
-  getLocalSpeechGateDecision,
-  recordLocalSpeechWindow,
-  recordPcm16SpeechWindow,
-} from "./localSpeechGate";
+const createLocalSpeechGateState = () => null;
+const getLocalSpeechGateDecision = () => ({ shouldProcess: true });
+const recordLocalSpeechWindow = () => {};
+const recordPcm16SpeechWindow = () => {};
 import { reacquireIfDead } from "./micTrackHealth";
 import { isMicWarm, WARMUP_ACQUIRE_TIMEOUT_MS } from "./micWarmState";
 import {
@@ -4424,10 +4423,13 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         "transcription"
       );
 
+      const effectiveModel = route.provider === "self-hosted" ? route.model : model;
       formData.append("file", uploadAudio, `audio.${extension}`);
-      formData.append("model", model);
+      if (effectiveModel) {
+        formData.append("model", effectiveModel);
+      }
 
-      if (language && model !== "orukeet-v0.1.0") {
+      if (language && effectiveModel !== "orukeet-v0.1.0") {
         formData.append("language", language);
       }
 
@@ -4508,7 +4510,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           : keywordDictionary
         : dictionaryPrompt;
 
-      const shouldStream = this.shouldStreamTranscription(model, provider);
+      const shouldStream = this.shouldStreamTranscription(model, route.provider);
       if (shouldStream) {
         formData.append("stream", "true");
       }
@@ -4571,18 +4573,45 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
           ? selfHostedSttRequest(getSettings().selfHostedSttHeaders?.dictation, headers)
           : { headers, redirect: "follow" };
       let response;
-      try {
-        response = await fetch(endpoint, {
-          method: "POST",
-          headers: request.headers,
-          body: formData,
-          // Chromium reports a refused redirect as a network failure; "manual" returns it as a
-          // response, so it can be named.
-          redirect: request.redirect === "error" ? "manual" : request.redirect,
-          signal: requestController.signal,
-        });
-      } catch (err) {
-        throw asProviderError(err, providerErrorContext);
+      const canProxySelfHosted =
+        (route.provider === "self-hosted" || route.provider === "custom") &&
+        typeof window !== "undefined" &&
+        typeof window.electronAPI?.proxySelfHostedTranscription === "function" &&
+        !shouldStream;
+      if (canProxySelfHosted) {
+        try {
+          response = await requestSelfHostedBatch({
+            endpoint,
+            audio: uploadAudio,
+            fileName: `audio.${extension}`,
+            mimeType,
+            headers: request.headers,
+            redirect: request.redirect,
+            model: effectiveModel || undefined,
+            language: language && effectiveModel !== "orukeet-v0.1.0" ? language : undefined,
+            prompt:
+              dictionaryPrompt && sendsDictionary && effectiveModel !== "orukeet-v0.1.0"
+                ? dictionaryPrompt
+                : undefined,
+            signal: requestController.signal,
+          });
+        } catch (err) {
+          throw asProviderError(err, providerErrorContext);
+        }
+      } else {
+        try {
+          response = await fetch(endpoint, {
+            method: "POST",
+            headers: request.headers,
+            body: formData,
+            // Chromium reports a refused redirect as a network failure; "manual" returns it as a
+            // response, so it can be named.
+            redirect: request.redirect === "error" ? "manual" : request.redirect,
+            signal: requestController.signal,
+          });
+        } catch (err) {
+          throw asProviderError(err, providerErrorContext);
+        }
       }
       if (response.type === "opaqueredirect") {
         throw providerError(PROVIDER_ERROR_CODES.REDIRECTED, providerErrorContext);

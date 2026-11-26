@@ -31,11 +31,9 @@ import {
   localChoiceRefusal,
 } from "../../stores/policyRules";
 import { usePolicyStore } from "../../stores/policyStore";
-import { readSkillCardRecord, SKILL_CARD_TOOLS } from "./skillCardRecord";
 import { getUsageState } from "../../lib/usageStore";
 import { readIsSubscribed } from "../../lib/subscriptionFlag";
 import { hasConnectorPlan } from "../../utils/connectorEligibility";
-import { gmailSendStatus, resolveEmailDraftTarget } from "../../utils/emailDraftTarget";
 import {
   ensureConnectorStatus,
   readyConnectorIds,
@@ -53,33 +51,16 @@ import {
   calendarProviders,
   resolveUnavailableCapabilities,
 } from "../../config/agentCapabilities";
-import { refreshSkills, useSkillsStore } from "../../stores/skillsStore";
 import { estimateNoteTokens } from "../../helpers/noteChunking";
-import {
-  SKILL_CATALOG_MAX_TOKENS,
-  SKILL_CONTEXT_MAX_TOKENS,
-  activeSkillNames,
-  buildCreatorContext,
-  buildSkillBlock,
-  buildSkillCatalog,
-  fitSkillBlock,
-  skillNotUsedNote,
-  withSkillContext,
-} from "../../utils/skillContext";
-import { pickSkillForRequest } from "../../utils/localSkillPick";
 import type { SkillRef, SkillSummary } from "../../types/skills";
 import { getLlmDictionaryWords } from "../../utils/snippets";
 import { noteAttendeesContext, withoutAttendeesFence } from "../../utils/noteAttendees";
 import { FULL_TRANSCRIPT_MAX_TOKENS } from "../../utils/transcriptEvidence";
 import { createToolRegistry } from "../../services/tools";
-import type { SharedDictionaryWord } from "../../services/tools/dictionaryTool";
-import { setSharedWordsHidden } from "../../services/sharedDictionaryActions";
 import { readActiveWorkspaceId } from "../../stores/workspaceStore";
 import { resolveAssistantNoteScope } from "../../lib/assistantNoteScope";
-import { selectAppliedSharedWords } from "../../utils/sharedDictionaryHints";
 import { executeTool, type ToolRegistry, type ToolResult } from "../../services/tools/ToolRegistry";
 import { createToolExecutionScope, type ToolExecutionScope } from "./toolExecutionScope";
-import { isQueryResultData } from "../../services/tools/connectors/runQueryAction";
 import type { InteractionToolOptions } from "../../services/tools/interactionTools";
 import { isApiKeySetupAllowed } from "../../helpers/agentApiKeyPolicy";
 import { API_KEY_PROVIDERS } from "../../stores/agentInteractionStore";
@@ -93,7 +74,6 @@ import type {
   ChatImageAttachment,
   ToolCallInfo,
 } from "./types";
-import { isPendingAssistantModelDownloading } from "../onboarding/pendingLocalModels";
 import {
   connectsFirst,
   HISTORY_MAX_TOKENS,
@@ -120,32 +100,6 @@ const STREAM_FLUSH_INTERVAL_MS = 32;
 const MAX_SAVED_REASONING_CHARS = 20_000;
 
 const LOCAL_TOOL_MIN_PARAMS_B = 4;
-
-// The tool reads the DB mirror over IPC (not the control panel's store), so it
-// also works from the dictation window, for the workspace every window uses now.
-async function readAppliedSharedWords(): Promise<SharedDictionaryWord[]> {
-  const workspaceId = readActiveWorkspaceId();
-  if (!workspaceId) return [];
-  try {
-    const snapshot = await window.electronAPI?.getSharedDictionary?.(workspaceId);
-    if (!snapshot) return [];
-    return selectAppliedSharedWords(snapshot, getSettings());
-  } catch (error) {
-    // The assistant then treats shared words as absent rather than failing the call.
-    logger.warn(
-      "Failed to read the shared dictionary for the assistant",
-      { error: (error as Error)?.message },
-      "dictionary"
-    );
-    return [];
-  }
-}
-
-async function hideAppliedSharedWords(ids: string[]): Promise<void> {
-  const workspaceId = readActiveWorkspaceId();
-  if (!workspaceId) throw new Error("No active workspace");
-  await setSharedWordsHidden(workspaceId, ids, true);
-}
 
 function estimateModelSizeB(modelId: string): number {
   const match = modelId.match(/-([\d.]+)[bB]/);
@@ -664,9 +618,8 @@ export function createChatTurnEngine(
       // at setup): nothing on this device can answer, and Cloud is not the
       // fallback. Say where to pick one, or that the model is on its way.
       if (llmMode === "local" && !llmConfig.model.trim()) {
-        const downloading = await isPendingAssistantModelDownloading();
         if (cancelled()) return;
-        answerWithLine(t(downloading ? "chat.localModelDownloading" : "chat.localModelMissing"));
+        answerWithLine(t("chat.localModelMissing"));
         return;
       }
 
@@ -697,23 +650,8 @@ export function createChatTurnEngine(
         !isCloudAgent && (isLocalProvider || isLanAgent) ? "selfHosted" : "hosted";
 
       let usableSkills: SkillSummary[] = [];
-      // The skills this chat may use: the user's, less those taken off it. The creator still
-      // hears of every skill, so it doesn't propose one the user already has.
       let offeredSkills: SkillSummary[] = [];
-      const removedSkills = new Set(options?.removedSkills);
-      let activeRefs: SkillRef[] = skillsEnabled
-        ? activeSkillNames(allMessages, options?.attachedSkill).filter(
-            (ref) => ref.builtin || !removedSkills.has(ref.name)
-          )
-        : [];
-      if (skillsEnabled) {
-        // Read fresh: a skill switched off or edited since the last send is never offered.
-        await refreshSkills();
-        usableSkills = useSkillsStore
-          .getState()
-          .skills.filter((skill) => skill.enabled && skill.valid);
-        offeredSkills = usableSkills.filter((skill) => !removedSkills.has(skill.name));
-      }
+      let activeRefs: SkillRef[] = [];
 
       const scope = turnOptions.searchScope;
       // The spaces this turn may read, for its tools and its library context alike.
@@ -745,11 +683,6 @@ export function createChatTurnEngine(
       if (supportsTools) {
         // The first send in a window must not miss a connector that is already connected.
         if (connectorsAvailable) await ensureConnectorStatus();
-        const currentEmailDraftTarget = () =>
-          resolveEmailDraftTarget({
-            ...getSettings(),
-            gmailStatus: gmailSendStatus(useConnectorStatusStore.getState().statuses.gmail),
-          });
         interactions = allowInteractions
           ? {
               connectionTargets: connectionTargets(useConnectorStatusStore.getState().statuses, {
@@ -770,28 +703,11 @@ export function createChatTurnEngine(
               inferenceScope,
             }
           : undefined;
-        const connectors = connectorsAvailable
-          ? {
-              emailDraftTarget: currentEmailDraftTarget(),
-              readyConnectorIds: readyConnectorIds(),
-              ...(interactions
-                ? {
-                    asksUser: true,
-                    connectableConnectorIds: interactions.connectionTargets,
-                    ...(interactions.connectionTargets.includes("gmail")
-                      ? { currentEmailDraftTarget }
-                      : {}),
-                  }
-                : {}),
-            }
-          : undefined;
-        connectorsOffered = connectors !== undefined;
-        const creatorAttached = Boolean(options?.attachedSkill?.builtin);
+        connectorsOffered = false;
         const keepNotesUnchanged = !!options?.keepNotesUnchanged;
         registry = createToolRegistry({
           isSignedIn: settings.isSignedIn,
           cloudBackupEnabled: settings.cloudBackupEnabled,
-          calendarConnected,
           searchScope: scope,
           scopeSpaceIds,
           protectNotes,
@@ -802,29 +718,11 @@ export function createChatTurnEngine(
           webSearchEnabled,
           productHelpEnabled,
           vocabulary: {
-            getDictionary: () => getSettings().customDictionary,
-            updateDictionary: (changes) =>
-              useSettingsStore.getState().updateCustomDictionary(changes),
-            getSharedWords: readAppliedSharedWords,
-            hideSharedWords: hideAppliedSharedWords,
             getSnippets: () => getSettings().snippets,
             setSnippets: (snippets) => useSettingsStore.getState().setSnippets(snippets),
           },
-          connectors,
           keepNotesUnchanged,
           interactions,
-          skills: skillsEnabled
-            ? {
-                usable: offeredSkills,
-                activeNames: () => carriedSkillNames,
-                read: (ref) =>
-                  window.electronAPI?.skillsReadForModel?.(ref) ?? Promise.resolve(null),
-                // Last use only orders the catalog; a failed stamp isn't worth surfacing.
-                markUsed: (name) => void window.electronAPI?.skillsMarkUsed?.(name).catch(() => {}),
-                maxTokens: SKILL_CONTEXT_MAX_TOKENS[contextTier],
-                creatorAttached,
-              }
-            : undefined,
         });
       }
 
@@ -857,75 +755,9 @@ export function createChatTurnEngine(
       // in the history the model sees) rides only in the model's copy of this turn, rebuilt
       // on every send, so the chat and its saved history keep just what the user typed.
       // A model without tools can't load a skill, so the app picks at most one for it.
-      const picked =
-        skillsEnabled &&
-        registry === null &&
-        !options?.attachedSkill &&
-        options?.allowSkillPick !== false
-          ? pickSkillForRequest(userText, offeredSkills)
-          : null;
-      if (picked) {
-        activeRefs = [
-          { name: picked.name },
-          ...activeRefs.filter((ref) => ref.builtin || ref.name !== picked.name),
-        ];
-      }
       const skillBlocks: string[] = [];
-      const carried = new Set<string>();
-      let skillRoom: number = SKILL_CONTEXT_MAX_TOKENS[contextTier];
-      for (const ref of activeRefs) {
-        // A skill switched off, broken or unreadable since it was attached or loaded is left
-        // out, and the turn still goes. The attached one's chip still shows, so the model is
-        // told it isn't used, to say so.
-        const leftOut = (): void => {
-          if (ref === options?.attachedSkill) skillBlocks.push(skillNotUsedNote(ref.name));
-        };
-        if (!ref.builtin && !usableSkills.some((skill) => skill.name === ref.name)) {
-          leftOut();
-          continue;
-        }
-        const skill = await window.electronAPI
-          ?.skillsReadForModel?.({ ...ref, withFiles: registry === null })
-          .catch(() => null);
-        if (!skill) {
-          leftOut();
-          continue;
-        }
-        const connectedApps = connectorsAvailable
-          ? readyConnectorIds().map((id) => CONNECTOR_NAMES[id] ?? id)
-          : [];
-        const creatorContext = ref.builtin
-          ? `\n${buildCreatorContext(usableSkills, connectedApps, {
-              canUseTools: registry !== null,
-              maxTokens: SKILL_CATALOG_MAX_TOKENS[contextTier],
-              opening: t("skills.chat.creatorOpening"),
-            })}`
-          : "";
-        const blockOptions = { inlineFiles: registry === null };
-        const { text: fitted, cut } = fitSkillBlock(
-          skill,
-          skillRoom - estimateNoteTokens(creatorContext),
-          blockOptions
-        );
-        const whole = !cut;
-        // The first skill had all the room load_skill has, so even cut it is as much of it as
-        // the model can get. A later one was cut by the skills before it: a model with tools
-        // reads it with load_skill, which gives it that whole room.
-        const first = skillBlocks.length === 0;
-        if (!whole && registry !== null && !first) continue;
-        const block = fitted + creatorContext;
-        skillRoom -= estimateNoteTokens(block);
-        skillBlocks.push(block);
-        // A carried skill is "already loaded" for load_skill, which would only send it again;
-        // without tools there is no load_skill, and what's carried is what the picked chip names.
-        if (!ref.builtin && (whole || first || registry === null)) carried.add(ref.name);
-        if (skillRoom <= 0) break;
-      }
+      carriedSkillNames = new Set<string>();
       if (cancelled()) return;
-      carriedSkillNames = carried;
-      if (picked && carried.has(picked.name)) {
-        options?.onSkillPicked?.({ name: picked.name, displayName: picked.displayName });
-      }
 
       if (groundingNote) {
         const noteId = turnOptions.openNoteId ?? turnOptions.sourceNoteId;
@@ -994,10 +826,8 @@ export function createChatTurnEngine(
           openNoteTranscriptPreview: currentNote.transcriptPreview,
           userName: turnOptions.userName,
           writingStyle: settings.toneStyleEnabled ? { tones: settings.toneStyles } : undefined,
-          skillCatalog: registry?.get("load_skill")
-            ? buildSkillCatalog(offeredSkills, SKILL_CATALOG_MAX_TOKENS[contextTier])
-            : undefined,
-          skillContent: skillBlocks.length > 0,
+          skillCatalog: undefined,
+          skillContent: false,
         }),
         getLlmDictionaryWords(settings, { includeTriggers: true }),
         settings.uiLanguage
@@ -1032,13 +862,6 @@ export function createChatTurnEngine(
         );
       }
 
-      if (skillBlocks.length > 0) {
-        transformLastUserMessage(history, (message) =>
-          typeof message.content === "string"
-            ? { ...message, content: withSkillContext(message.content, skillBlocks) }
-            : null
-        );
-      }
       // The time and the matching notes change with every message, so they
       // ride on it: the system prompt, tools and earlier turns stay cacheable.
       transformLastUserMessage(history, (message) =>
@@ -1228,8 +1051,7 @@ export function createChatTurnEngine(
           scheduleContentFlush();
         }
         if (cancelled()) {
-          const call = toolCalls.find((call) => call.id === id);
-          if (call && !SKILL_CARD_TOOLS.has(call.name)) return;
+          return;
         }
         const metadata =
           result.success && result.data && typeof result.data === "object"
@@ -1238,21 +1060,10 @@ export function createChatTurnEngine(
         const patch: Partial<ToolCallInfo> = {
           status: "completed",
           result: result.displayText,
-          ...(metadata && !isQueryResultData(metadata) ? { metadata } : {}),
+          ...(metadata ? { metadata } : {}),
           ...(result.success ? {} : { failed: true }),
         };
         turnHooks.annotate?.(id, patch);
-        const call = toolCalls.find((call) => call.id === id);
-        // Stop can discard a partial answer, but cannot undo a skill already saved.
-        if (call && readSkillCardRecord(call)?.status === "saved") {
-          save(
-            options?.persistAssistantMessage ?? onTurnCheckpoint ?? onStreamComplete,
-            allowInteractions ||
-              (turn.finishedAt != null && turn.status !== "error" && !control.explicit)
-              ? fullContent
-              : ""
-          );
-        }
       };
 
       // A stop keeps what the reply has so far, and every call still running
@@ -1542,7 +1353,7 @@ export function createChatTurnEngine(
                     finishedAt: Date.now(),
                     ...(chunk.isError ? { failed: true } : {}),
                     result: toolDisplayTexts.get(toolCallId) ?? chunk.displayText,
-                    ...(chunk.metadata && !isQueryResultData(chunk.metadata)
+                    ...(chunk.metadata
                       ? {
                           metadata: productHelpMetadata(tc.name, chunk.metadata) ?? chunk.metadata,
                         }

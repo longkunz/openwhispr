@@ -205,77 +205,14 @@ class UpdateManager {
   }
 
   async checkForUpdates() {
-    try {
-      if (this.getPolicy) await this.refreshPolicy();
-      if (!this._policyFailure() && this.requestCleanup) await this.requestCleanup;
-      const failure = this._policyFailure();
-      if (failure) {
-        this.checkAwaitingPolicy = true;
-        return { ...failure, updateAvailable: false };
-      }
-      if (process.env.NODE_ENV === "development") {
-        return {
-          updateAvailable: false,
-          message: "Update checks are disabled in development mode",
-        };
-      }
-
-      if (!isUpdaterSupported) {
-        return {
-          updateAvailable: false,
-          message: "Updates are installed through the system package manager",
-        };
-      }
-
-      if (this.checkPromise) return this.checkPromise;
-
-      this.httpExecutor.resumeRequests();
-      const epoch = this.workEpoch;
-      this.checkEpoch = epoch;
-      this.checkPromise = this._checkForUpdates(epoch);
-      try {
-        return await this.checkPromise;
-      } finally {
-        this.checkPromise = null;
-        this.checkEpoch = null;
-      }
-    } catch (error) {
-      console.error("❌ Update check error:", error);
-      throw error;
-    }
+    return {
+      updateAvailable: false,
+      message: "Updates are disabled",
+    };
   }
 
-  async _checkForUpdates(epoch) {
-    console.log("🔍 Checking for updates...");
-    const result = await autoUpdater.checkForUpdates().catch((error) => {
-      if (epoch !== this.workEpoch) return null;
-      throw error;
-    });
-    if (epoch !== this.workEpoch) {
-      result?.cancellationToken?.cancel();
-      return { ...(this._policyFailure() ?? this._policyChanged()), updateAvailable: false };
-    }
-    // A running download keeps the token it was started with, for an abort to cancel.
-    if (!this.downloadPromise) this.updateCancellationToken = result?.cancellationToken ?? null;
-    this.checkEpoch = null;
-    this._autoDownloadIfEnabled();
-
-    if (result?.isUpdateAvailable && result?.updateInfo) {
-      console.log("📋 Update available:", result.updateInfo.version);
-      return {
-        updateAvailable: true,
-        version: result.updateInfo.version,
-        releaseDate: result.updateInfo.releaseDate,
-        files: result.updateInfo.files,
-        releaseNotes: result.updateInfo.releaseNotes,
-      };
-    } else {
-      console.log("✅ Already on latest version");
-      return {
-        updateAvailable: false,
-        message: "You are running the latest version",
-      };
-    }
+  async _checkForUpdates(_epoch) {
+    return { updateAvailable: false };
   }
 
   async downloadUpdate() {
@@ -635,17 +572,7 @@ class UpdateManager {
   }
 
   checkForUpdatesOnStartup() {
-    if (process.env.NODE_ENV !== "development" && isUpdaterSupported) {
-      this.startupCheckTimeout = setTimeout(() => {
-        this.startupCheckTimeout = null;
-        this._autoCheckForUpdates("Startup");
-      }, 3000);
-
-      const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
-      this.updateCheckInterval = setInterval(() => {
-        this._autoCheckForUpdates("Periodic");
-      }, FOUR_HOURS_MS);
-    }
+    // Update checks disabled.
   }
 
   cleanup() {

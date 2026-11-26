@@ -1,7 +1,8 @@
-import { CALENDAR_LOOKBACK_MS } from "../helpers/calendarCacheWindow";
 import type { CalendarEvent } from "../types/calendar";
 import { parseAttendees } from "./calendarAttendees";
 import { parseEventDate } from "./dateFormatting";
+
+const CALENDAR_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 
 const MAX_SEARCH_RESULTS = 50;
 

@@ -9,7 +9,6 @@ import { DeviceNoteView } from "./DeviceNoteView";
 import SpacesTree from "./SpacesTree";
 import { ContainerOverview } from "./overview/ContainerOverview";
 import NotesStructureIntroDialog from "./NotesStructureIntroDialog";
-import ActionManagerDialog from "./ActionManagerDialog";
 import AddNotesToFolderDialog from "./AddNotesToFolderDialog";
 import { useActionProcessing } from "../../hooks/useActionProcessing";
 import { useResizableWidth } from "../../hooks/useResizableWidth";
@@ -90,6 +89,7 @@ import {
   rescueRecordingNote,
 } from "../../stores/meetingRecordingStore";
 import { useNotesOnboarding } from "../../hooks/useNotesOnboarding";
+import { useVoiceNoteRecorder } from "../../hooks/useVoiceNoteRecorder";
 import { startRecordingForNote, useCreateNote } from "../../hooks/useCreateNote";
 import { useTeamSpacesCapability } from "../../hooks/useTeamSpacesCapability";
 import { useAuth } from "../../hooks/useAuth";
@@ -634,20 +634,6 @@ export default function PersonalNotesView({
       ? linkedEventLookup.event
       : undefined;
 
-  const startRecording = useCallback(
-    () =>
-      startRecordingForNote(
-        activeNote ?? null,
-        recordingRecorderName(activeNote ?? null, user, t),
-        "record-button"
-      ),
-    [activeNote, user, t]
-  );
-
-  const stopRecording = useCallback(async () => {
-    await storeStopRecording();
-  }, []);
-
   useEffect(() => {
     const currentDraft = draftRef.current;
 
@@ -804,6 +790,34 @@ export default function PersonalNotesView({
     },
     [commitDraft, scheduleDocumentSave]
   );
+
+  const handleVoiceNoteTranscribed = useCallback(
+    (targetNoteId: number, text: string) => {
+      const currentDraft = draftRef.current;
+      if (currentDraft && currentDraft.noteId === targetNoteId) {
+        const existing = currentDraft.content || "";
+        const nextContent = existing.trim() ? `${existing.trimEnd()}\n\n${text}` : text;
+        handleContentChange(targetNoteId, nextContent);
+        return;
+      }
+      const fallbackNote = getNoteFromStore(targetNoteId);
+      const existing = fallbackNote?.content || "";
+      const nextContent = existing.trim() ? `${existing.trimEnd()}\n\n${text}` : text;
+      void window.electronAPI?.updateNote?.(targetNoteId, { content: nextContent });
+    },
+    [handleContentChange]
+  );
+
+  const voiceNoteRecorder = useVoiceNoteRecorder(handleVoiceNoteTranscribed);
+
+  const startRecording = useCallback(() => {
+    if (!activeNote) return;
+    void voiceNoteRecorder.startRecording(activeNote.id);
+  }, [activeNote, voiceNoteRecorder]);
+
+  const stopRecording = useCallback(async () => {
+    await voiceNoteRecorder.stopRecording();
+  }, [voiceNoteRecorder]);
 
   const handleEnhancedContentChange = useCallback(
     (sourceNoteId: number, content: string) => {
@@ -1018,7 +1032,8 @@ export default function PersonalNotesView({
 
   // Final and periodic transcript persistence live in MeetingRecordingMount /
   // the store — this view can be unmounted when an auto-end stop fires.
-  const isActiveNoteRecording = isTranscribing && recordingNoteId === activeNote?.id;
+  const isActiveNoteRecording =
+    voiceNoteRecorder.isRecording && voiceNoteRecorder.recordingNoteId === activeNote?.id;
 
   const runNoteAction = async (action: ActionItem) => {
     if (!editorNote) return;
@@ -1148,21 +1163,6 @@ export default function PersonalNotesView({
             isResizing={notesListResize.isResizing}
             onPointerDown={notesListResize.startResize}
           />
-          <div className="px-2 pt-2 pb-1 shrink-0 space-y-0.5">
-            <button
-              onClick={() => setManagerKind("template")}
-              className={cn(
-                "flex items-center gap-2 w-full px-2 py-1.5 rounded-md text-xs",
-                "text-foreground/85 hover:text-foreground hover:bg-foreground/5",
-                "transition-colors duration-150",
-                "focus:outline-none focus-visible:ring-1 focus-visible:ring-ring/30"
-              )}
-            >
-              <Sparkles size={14} className="shrink-0" />
-              {t("notes.sidebar.templatesAndActions")}
-            </button>
-          </div>
-
           <SpacesTree
             onFlushPendingSaves={savePendingNow}
             onDeleteNote={handleDelete}
@@ -1186,8 +1186,10 @@ export default function PersonalNotesView({
               onContentChange={handleContentChange}
               isSaving={isSaving}
               isRecording={isActiveNoteRecording}
-              isProcessing={false}
-              recordingAllowed={meetingRecordingAllowed}
+              isProcessing={voiceNoteRecorder.isProcessing}
+              recordingStartedAt={voiceNoteRecorder.recordingStartedAt}
+              readMicLevel={voiceNoteRecorder.getMicLevel}
+              recordingAllowed={true}
               onStartRecording={startRecording}
               onStopRecording={stopRecording}
               onExportNote={handleExportNote}
@@ -1221,11 +1223,6 @@ export default function PersonalNotesView({
               onCancelAction={cancelAction}
               onRunNoteAction={runNoteAction}
               onManageActions={setManagerKind}
-            />
-            <ActionManagerDialog
-              open={managerKind !== null}
-              onOpenChange={(open) => !open && setManagerKind(null)}
-              initialKind={managerKind ?? "template"}
             />
           </>
         ) : activeContext && overviewSpace ? (

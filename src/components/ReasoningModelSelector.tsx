@@ -11,7 +11,6 @@ import type {
 import { Button } from "./ui/button";
 import { CircleAlert, Cloud, Lock, Zap } from "./icons";
 import ModelCardList from "./ui/ModelCardList";
-import LocalModelPicker, { type LocalProvider } from "./LocalModelPicker";
 import { ProviderTabs, type ProviderTabItem } from "./ui/ProviderTabs";
 import OpenAICompatiblePanel from "./OpenAICompatiblePanel";
 import { API_ENDPOINTS } from "../config/constants";
@@ -489,24 +488,7 @@ export default function ReasoningModelSelector({
     });
   }, [check.phase, displayedCloudProvider, typedKey, refused, followKeyDraft]);
 
-  const localProviders = useMemo<LocalProvider[]>(() => {
-    return modelRegistry.getAllProviders().map((provider) => ({
-      id: provider.id,
-      name: provider.name,
-      models: provider.models.map((model) => ({
-        id: model.id,
-        name: model.name,
-        size: model.size,
-        sizeBytes: model.sizeBytes,
-        description: model.description,
-        descriptionKey: model.descriptionKey,
-        specUrl: model.hfRepo ? `https://huggingface.co/${model.hfRepo}` : undefined,
-        recommended: model.recommended,
-        legacy: model.legacy,
-      })),
-    }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the catalog changes in place; its version is the signal
-  }, [registryVersion]);
+  const localProviders: Array<{ id: string; name: string; models: any[] }> = [];
 
   const openaiModelOptions = useMemo<CloudModelOption[]>(() => {
     const { icon, invertInDark } = getRemoteProviderIcon("openai");
@@ -747,21 +729,6 @@ export default function ReasoningModelSelector({
             </div>
           )}
         </div>
-      )}
-
-      {effectiveMode === "local" && (
-        <>
-          <LocalModelPicker
-            providers={localProviders}
-            selectedModel={reasoningModel}
-            selectedProvider={selectedLocalProvider}
-            onModelSelect={handleModelSelect}
-            onProviderSelect={handleLocalProviderChange}
-            modelType="llm"
-            colorScheme="purple"
-          />
-          <GpuStatusBadge />
-        </>
       )}
     </div>
   );

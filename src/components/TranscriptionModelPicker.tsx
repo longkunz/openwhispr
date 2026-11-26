@@ -12,10 +12,8 @@ import { ProviderIcon } from "./ui/ProviderIcon";
 import { LocalModelPolicyNotice } from "./ui/LocalModelPolicyNotice";
 import { ProviderTabs } from "./ui/ProviderTabs";
 import ModelCardList from "./ui/ModelCardList";
-import { DownloadProgressBar } from "./ui/DownloadProgressBar";
 import { ConfirmDialog } from "./ui/dialog";
 import { useDialogs } from "../hooks/useDialogs";
-import { useModelDownload, type DownloadProgress } from "../hooks/useModelDownload";
 import {
   getDictationTranscriptionProviders,
   getTranscriptionProviders,
@@ -53,12 +51,6 @@ import {
   useByokTranscriptionModelAllowed,
   usePolicySnapshot,
 } from "../hooks/usePolicy";
-import {
-  LOCAL_ASR_ORGANIZATIONS,
-  getASRModelOrganization,
-  getSelectedASROrganization,
-  usesParakeetManager,
-} from "../helpers/localASROrganization";
 import { getRemoteProviderIcon } from "../utils/providerIcons";
 import { createExternalLinkHandler } from "../utils/externalLinks";
 import { API_ENDPOINTS, normalizeBaseUrl } from "../config/constants";
@@ -75,7 +67,6 @@ import {
   type ProviderConnectionConfig,
 } from "../hooks/useConnectionAutoCheck";
 import { getCachedPlatform } from "../utils/platform";
-import { pickWhisperGpuBackend } from "../utils/whisperGpuPack";
 import logger from "../utils/logger";
 import type { ParakeetCheckResult } from "../types/electron";
 
@@ -414,8 +405,13 @@ const PROVIDER_CREDENTIALS: Record<
 
 const TINFOIL_AUDIO_DOCS_URL = "https://docs.tinfoil.sh/models/audio";
 
-const LOCAL_PROVIDER_TABS: Array<{ id: string; name: string; disabled?: boolean }> =
-  LOCAL_ASR_ORGANIZATIONS;
+type DownloadProgress = { downloadedBytes: number; totalBytes: number; percentage: number };
+const LOCAL_PROVIDER_TABS: Array<{ id: string; name: string; disabled?: boolean }> = [];
+const getSelectedASROrganization = (provider?: string, _model?: string) => provider || "whisper";
+const getASRModelOrganization = (_model?: string) => "whisper";
+const usesParakeetManager = (_provider?: string) => false;
+const pickWhisperGpuBackend = (..._args: unknown[]): "cuda" | "vulkan" | null => null;
+const deleteModel = async (_id: string, _cb?: () => Promise<void>) => {};
 
 interface ModeToggleProps {
   useLocalWhisper: boolean;
@@ -1145,30 +1141,6 @@ export default function TranscriptionModelPicker({
     setGpuDownloading(false);
   };
 
-  const {
-    downloads: whisperDownloads,
-    downloadModel,
-    deleteModel,
-    isDownloadingModel,
-    cancelDownload,
-    isCancellingModel,
-  } = useModelDownload({
-    modelType: "whisper",
-    onDownloadComplete: loadLocalModels,
-  });
-
-  const {
-    downloads: parakeetDownloads,
-    downloadModel: downloadParakeetModel,
-    deleteModel: deleteParakeetModel,
-    isDownloadingModel: isDownloadingParakeetModel,
-    cancelDownload: cancelParakeetDownload,
-    isCancellingModel: isCancellingParakeetModel,
-  } = useModelDownload({
-    modelType: "parakeet",
-    onDownloadComplete: loadParakeetModels,
-  });
-
   const handleModeChange = useCallback(
     (isLocal: boolean) => {
       onModeChange(isLocal);
@@ -1468,201 +1440,15 @@ export default function TranscriptionModelPicker({
       });
   }, [currentCloudProvider, displayedCloudProvider, modelAllowed, t]);
 
-  const progressDisplay = useMemo(() => {
-    if (!effectiveLocal) return null;
+  const progressDisplay = null;
 
-    const activeDownloads = [
-      ...Object.values(whisperDownloads),
-      ...Object.values(parakeetDownloads),
-    ];
-    if (activeDownloads.length === 0) return null;
-
-    return (
-      <div className="space-y-2">
-        {activeDownloads.map((status) => {
-          const modelInfo =
-            status.modelType === "whisper"
-              ? WHISPER_MODEL_INFO[status.modelId]
-              : PARAKEET_MODEL_INFO[status.modelId];
-          return (
-            <DownloadProgressBar
-              key={`${status.modelType}:${status.modelId}`}
-              modelName={modelInfo?.name || status.modelId}
-              progress={{
-                percentage: status.progress,
-                downloadedBytes: status.downloadedBytes,
-                totalBytes: status.totalBytes,
-              }}
-              isInstalling={status.phase === "installing"}
-              isVerifying={status.phase === "verifying"}
-            />
-          );
-        })}
-      </div>
-    );
-  }, [effectiveLocal, whisperDownloads, parakeetDownloads]);
-
-  const renderLocalModels = () => {
-    const modelsToRender =
-      localModels.length === 0
-        ? Object.entries(WHISPER_MODEL_INFO).map(([modelId, info]) => ({
-            model: modelId,
-            downloaded: false,
-            size_mb: info.sizeMb,
-          }))
-        : localModels;
-
-    return (
-      <div className="space-y-0.5">
-        {modelsToRender
-          .filter(
-            (model) =>
-              model.downloaded ||
-              isLocalModelAllowedByPolicy(policyState, "transcription", model.model)
-          )
-          .map((model) => {
-            const modelId = model.model;
-            const info = WHISPER_MODEL_INFO[modelId] ?? {
-              name: modelId,
-              description: t("transcription.fallback.whisperModelDescription"),
-              size: t("common.unknown"),
-              recommended: false,
-            };
-
-            return (
-              <LocalModelCard
-                key={modelId}
-                modelId={modelId}
-                name={info.name}
-                description={info.description}
-                size={info.size}
-                actualSizeMb={model.size_mb}
-                isSelected={
-                  modelId === selectedLocalModel &&
-                  isLocalModelAllowedByPolicy(policyState, "transcription", modelId)
-                }
-                policyBlocked={!isLocalModelAllowedByPolicy(policyState, "transcription", modelId)}
-                policyRefusal={localModelRowRefusal(policyState, "transcription")}
-                isDownloaded={model.downloaded ?? false}
-                isDownloading={isDownloadingModel(modelId)}
-                isCancelling={isCancellingModel(modelId)}
-                isInstalling={whisperDownloads[modelId]?.phase === "installing"}
-                recommended={info.recommended}
-                provider="whisper"
-                onSelect={() => handleWhisperModelSelect(modelId)}
-                onDelete={() => handleDelete(modelId)}
-                onDownload={() =>
-                  downloadModel(modelId, (downloadedId) => {
-                    setLocalModels((prev) =>
-                      prev.map((m) => (m.model === downloadedId ? { ...m, downloaded: true } : m))
-                    );
-                    handleWhisperModelSelect(downloadedId);
-                  })
-                }
-                onCancel={() => cancelDownload(modelId)}
-                styles={styles}
-              />
-            );
-          })}
-      </div>
-    );
-  };
-
-  const handleParakeetDelete = useCallback(
-    (modelId: string) => {
-      showConfirmDialog({
-        title: t("transcription.deleteModel.title"),
-        description: t("transcription.deleteModel.description"),
-        onConfirm: async () => {
-          await deleteParakeetModel(modelId, async () => {
-            const result = await window.electronAPI?.listParakeetModels();
-            if (result?.success) {
-              setParakeetModels(result.models);
-            }
-          });
-        },
-        variant: "destructive",
-      });
-    },
-    [showConfirmDialog, deleteParakeetModel, t]
-  );
-
-  // Organization tabs share the sherpa-onnx inventory and installation backend.
-  const renderParakeetModels = () => {
-    const modelsToRender = (
-      parakeetModels.length === 0
-        ? Object.entries(PARAKEET_MODEL_INFO).map(([modelId, info]) => ({
-            model: modelId,
-            downloaded: false,
-            size_mb: info.sizeMb,
-          }))
-        : parakeetModels
-    ).filter((model) => getASRModelOrganization(model.model) === internalLocalProvider);
-
-    return (
-      <div className="space-y-0.5">
-        {modelsToRender
-          .filter(
-            (model) =>
-              model.downloaded ||
-              isLocalModelAllowedByPolicy(policyState, "transcription", model.model)
-          )
-          .map((model) => {
-            const modelId = model.model;
-            const info = PARAKEET_MODEL_INFO[modelId] ?? {
-              name: modelId,
-              description: t("transcription.fallback.parakeetModelDescription"),
-              modelCardUrl: undefined,
-              size: t("common.unknown"),
-              language: "en",
-              recommended: false,
-            };
-
-            return (
-              <LocalModelCard
-                key={modelId}
-                modelId={modelId}
-                name={info.name}
-                description={info.description}
-                size={info.size}
-                actualSizeMb={model.size_mb}
-                isSelected={
-                  modelId === selectedLocalModel &&
-                  isLocalModelAllowedByPolicy(policyState, "transcription", modelId)
-                }
-                policyBlocked={!isLocalModelAllowedByPolicy(policyState, "transcription", modelId)}
-                policyRefusal={localModelRowRefusal(policyState, "transcription")}
-                unavailable={parakeetCapability?.supported === false}
-                isDownloaded={model.downloaded ?? false}
-                isDownloading={isDownloadingParakeetModel(modelId)}
-                isCancelling={isCancellingParakeetModel(modelId)}
-                isInstalling={parakeetDownloads[modelId]?.phase === "installing"}
-                recommended={info.recommended}
-                provider={getASRModelOrganization(modelId)}
-                modelCardUrl={info.modelCardUrl}
-                onSelect={() => handleParakeetModelSelect(modelId)}
-                onDelete={() => handleParakeetDelete(modelId)}
-                onDownload={() =>
-                  downloadParakeetModel(modelId, (downloadedId) => {
-                    setParakeetModels((prev) =>
-                      prev.map((m) => (m.model === downloadedId ? { ...m, downloaded: true } : m))
-                    );
-                    handleParakeetModelSelect(downloadedId);
-                  })
-                }
-                onCancel={() => cancelParakeetDownload(modelId)}
-                styles={styles}
-              />
-            );
-          })}
-      </div>
-    );
-  };
 
   return (
     <div className={`space-y-2 ${className}`}>
       <ConnectionCheckAnnouncer announcement={check.announcement} />
-      {!mode && <ModeToggle useLocalWhisper={effectiveLocal} onModeChange={handleModeChange} />}
+      {!mode && false && (
+        <ModeToggle useLocalWhisper={effectiveLocal} onModeChange={handleModeChange} />
+      )}
 
       {!effectiveLocal ? (
         <>
@@ -1856,155 +1642,7 @@ export default function TranscriptionModelPicker({
             </div>
           )}
         </>
-      ) : (
-        <>
-          <ProviderTabs
-            providers={localProviderTabs}
-            selectedId={internalLocalProvider}
-            onSelect={handleLocalProviderChange}
-            colorScheme="purple"
-          />
-
-          <LocalModelPolicyNotice
-            scope="transcription"
-            hasSupportedModel={[
-              ...Object.keys(WHISPER_MODEL_INFO),
-              ...(parakeetCapability?.supported === false ? [] : Object.keys(PARAKEET_MODEL_INFO)),
-            ].some((id) => isLocalModelAllowedByPolicy(policyState, "transcription", id))}
-          />
-          {progressDisplay}
-
-          {gpuDownloading && internalLocalProvider === "whisper" && (
-            <div>
-              <DownloadProgressBar modelName="GPU acceleration" progress={gpuProgress} />
-              <div className="px-2.5 pb-1 flex justify-end">
-                <button
-                  onClick={handleGpuCancel}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {t("gpu.cancel")}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {internalLocalProvider === "whisper" &&
-            !gpuDismissed &&
-            !gpuDownloading &&
-            gpuBackend && (
-              <div
-                className={`rounded-md border p-2.5 ${
-                  (gpuDownloaded ? gpuFailed : gpuNeedsUpdate)
-                    ? "border-warning/40 bg-warning/5"
-                    : "border-border bg-surface-1"
-                }`}
-              >
-                {gpuDownloaded ? (
-                  gpuFailed ? (
-                    <GpuWarningRow
-                      title={t("gpu.activationFailed")}
-                      description={t("gpu.activationFailedDescription")}
-                      actionLabel={t("gpu.retryActivation")}
-                      onAction={handleGpuRetry}
-                      onRemove={handleGpuDelete}
-                    >
-                      {gpuFailReason && (
-                        <p
-                          dir="ltr"
-                          className="mt-1 wrap-break-word font-mono text-[11px] leading-snug text-muted-foreground"
-                        >
-                          {gpuFailReason}
-                        </p>
-                      )}
-                    </GpuWarningRow>
-                  ) : (
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5">
-                        {gpuActivating ? (
-                          <>
-                            <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-primary animate-pulse" />
-                            <span className="text-xs font-medium text-foreground">
-                              {t("gpu.activatingBackend", { backend: gpuBackendName })}
-                            </span>
-                          </>
-                        ) : gpuActive ? (
-                          <>
-                            <Check size={13} className="text-success" />
-                            <span className="text-xs font-medium text-foreground">
-                              {t("gpu.activeBackend", { backend: gpuBackendName })}
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 bg-primary" />
-                            <span className="text-xs font-medium text-foreground">
-                              {t("gpu.readyBackend", { backend: gpuBackendName })}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                      <Button
-                        onClick={handleGpuDelete}
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 px-2 text-xs text-muted-foreground hover:text-destructive"
-                      >
-                        {t("gpu.remove")}
-                      </Button>
-                    </div>
-                  )
-                ) : gpuNeedsUpdate ? (
-                  <GpuWarningRow
-                    title={t("gpu.redownloadNeeded")}
-                    description={t("gpu.redownloadNeededDescription")}
-                    actionLabel={t("gpu.redownloadButton")}
-                    onAction={handleGpuDownload}
-                    onRemove={handleGpuDelete}
-                  />
-                ) : (
-                  <div className="flex items-start gap-2.5">
-                    <Zap size={13} className="text-primary shrink-0 mt-0.5" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-foreground">
-                        {t("gpu.transcriptionBanner")}
-                      </p>
-                      <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
-                        {t(gpuBackend === "cuda" ? "gpu.cudaDescription" : "gpu.vulkanDescription")}
-                      </p>
-                      <div className="flex items-center gap-2 mt-1.5">
-                        <Button
-                          onClick={handleGpuDownload}
-                          size="sm"
-                          variant="default"
-                          className="h-6 px-2.5 text-xs"
-                        >
-                          {t("gpu.enableBackend", { backend: gpuBackendName })}
-                        </Button>
-                        <button
-                          onClick={() => setGpuDismissed(true)}
-                          className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          {t("gpu.dismiss")}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {!gpuDownloaded && gpuDownloadError !== null && (
-                  <p className="mt-2 text-xs leading-snug text-destructive">
-                    {t("gpu.downloadFailed")}
-                    {gpuDownloadError && ` ${gpuDownloadError}`}
-                  </p>
-                )}
-              </div>
-            )}
-
-          <div>
-            {internalLocalProvider === "whisper" && renderLocalModels()}
-            {usesParakeetManager(internalLocalProvider) && renderParakeetModels()}
-          </div>
-        </>
-      )}
+      ) : null}
 
       <ConfirmDialog
         open={confirmDialog.open}

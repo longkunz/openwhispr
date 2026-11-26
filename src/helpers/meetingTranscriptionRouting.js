@@ -42,6 +42,8 @@ export function resolveMeetingTranscriptionOptions({
   cortiEnvironment,
   cortiTenant,
   keyterms,
+  remoteTranscriptionUrl,
+  remoteTranscriptionModel,
 }) {
   if (transcriptionMode === "local") {
     return {
@@ -67,12 +69,14 @@ export function resolveMeetingTranscriptionOptions({
     };
   }
 
-  // These two are reachable from a settings copy the user never made by hand —
-  // the 1.6.10 follow-flag migration carried a dictation choice Note Recording
-  // cannot serve — so they are sentinels that MeetingRecordingMount translates,
-  // not English sentences. Anything after the colon is an argument.
   if (transcriptionMode === "self-hosted") {
-    throw new Error("unsupportedSelfHosted");
+    return {
+      provider: "self-hosted",
+      mode: "self-hosted",
+      remoteUrl: remoteTranscriptionUrl || "",
+      model: remoteTranscriptionModel || "",
+      language,
+    };
   }
 
   if (transcriptionMode !== "providers") {

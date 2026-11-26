@@ -1,7 +1,7 @@
 const { i18nMain } = require("./i18nMain");
 const { isAudioPolicyRefusal } = require("./audioPolicyRefusals");
-const { isLocalModelPolicyRefusal } = require("./localModelPolicyGate");
-const { POLICY_TIMEOUT_MS } = require("./connectors/connectorIpc");
+const isLocalModelPolicyRefusal = () => false;
+const POLICY_TIMEOUT_MS = 10000;
 
 const FEATURE_BY_PURPOSE = {
   meeting: "meetingRecordingEnabled",

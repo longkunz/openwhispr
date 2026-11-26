@@ -22,7 +22,6 @@ import { syncService } from "../services/SyncService.js";
 import { stopRecording } from "../stores/meetingRecordingStore";
 import { afterWorkspaceJoined } from "../services/membershipActions";
 import { useToast } from "./ui/useToast";
-import SignInDialog from "./SignInDialog";
 import { formatList } from "../lib/formatList";
 import type { InvitationPreview } from "../types/electron";
 
@@ -206,8 +205,6 @@ export default function AcceptInvitationModal({ token, onClose, onAccepted }: Pr
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <SignInDialog open={signInOpen} onOpenChange={setSignInOpen} />
     </>
   );
 }
