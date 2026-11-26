@@ -1,3 +1,4 @@
+import { requestSelfHostedBatch } from "./selfHostedBatchRequest";
 import { refreshEnterpriseIdentityForUse } from "../stores/enterpriseIdentityStore.ts";
 import { selfHostedSttRequest } from "./selfHostedSttHeaders.js";
 import i18n from "../i18n";
@@ -4578,46 +4579,25 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         typeof window.electronAPI?.proxySelfHostedTranscription === "function" &&
         !shouldStream;
       if (canProxySelfHosted) {
-        const audioBuffer = await uploadAudio.arrayBuffer();
-        requestController.signal.throwIfAborted();
-        const proxyResult = await window.electronAPI.proxySelfHostedTranscription({
-          endpoint,
-          headers: request.headers,
-          redirect: request.redirect,
-          audioBuffer,
-          fileName: `audio.${extension}`,
-          mimeType,
-          model: effectiveModel || undefined,
-          language: language && effectiveModel !== "orukeet-v0.1.0" ? language : undefined,
-          prompt:
-            dictionaryPrompt && sendsDictionary && effectiveModel !== "orukeet-v0.1.0"
-              ? dictionaryPrompt
-              : undefined,
-        });
-        requestController.signal.throwIfAborted();
-        if (proxyResult?.fetchError) {
-          const err = new TypeError(proxyResult.fetchError.message || "fetch failed");
-          err.name = proxyResult.fetchError.name || "TypeError";
-          if (proxyResult.fetchError.code) err.code = proxyResult.fetchError.code;
-          if (proxyResult.fetchError.causeCode) {
-            err.cause = { code: proxyResult.fetchError.causeCode };
-          }
+        try {
+          response = await requestSelfHostedBatch({
+            endpoint,
+            audio: uploadAudio,
+            fileName: `audio.${extension}`,
+            mimeType,
+            headers: request.headers,
+            redirect: request.redirect,
+            model: effectiveModel || undefined,
+            language: language && effectiveModel !== "orukeet-v0.1.0" ? language : undefined,
+            prompt:
+              dictionaryPrompt && sendsDictionary && effectiveModel !== "orukeet-v0.1.0"
+                ? dictionaryPrompt
+                : undefined,
+            signal: requestController.signal,
+          });
+        } catch (err) {
           throw asProviderError(err, providerErrorContext);
         }
-        const proxyHeaders = proxyResult?.headers || {};
-        response = {
-          ok: Boolean(proxyResult?.ok),
-          status: proxyResult?.status ?? 0,
-          statusText: proxyResult?.statusText ?? "",
-          type: proxyResult?.redirected ? "opaqueredirect" : "basic",
-          headers: {
-            get: (key) => {
-              const lower = String(key).toLowerCase();
-              return proxyHeaders[lower] ?? (lower === "content-type" ? proxyResult?.contentType || "" : null);
-            },
-          },
-          text: async () => proxyResult?.bodyText ?? "",
-        };
       } else {
         try {
           response = await fetch(endpoint, {

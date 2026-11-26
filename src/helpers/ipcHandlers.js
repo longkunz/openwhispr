@@ -10,9 +10,7 @@ const liveSpeakerIdentifier = {
   getSpeakerEmbedding: () => null,
   mapSpeaker: () => {},
 };
-const {
-  registryData: modelRegistryData,
-} = require("../models/registryData.js");
+const { registryData: modelRegistryData } = require("../models/registryData.js");
 const { OrukeetStreaming, MANAGED_STREAM_OPTIONS } = require("./orukeetStreaming");
 const { connectManagedOrukeet } = require("./orukeetCloudSession");
 const {
@@ -5580,66 +5578,7 @@ class IPCHandlers {
       })
     );
 
-    ipcMain.handle(
-      "proxy-self-hosted-transcription",
-      async (
-        _event,
-        { endpoint, headers, redirect, audioBuffer, fileName, mimeType, model, language, prompt } = {}
-      ) => {
-        if (typeof endpoint !== "string" || !/^https?:\/\//i.test(endpoint)) {
-          return {
-            fetchError: {
-              message: "Invalid self-hosted transcription endpoint",
-              name: "TypeError",
-            },
-          };
-        }
-        try {
-          const formData = new FormData();
-          const blob = new Blob([Buffer.from(audioBuffer)], {
-            type: mimeType || "audio/webm",
-          });
-          formData.append("file", blob, fileName || "audio.webm");
-          if (typeof model === "string" && model.trim()) {
-            formData.append("model", model.trim());
-          }
-          if (typeof language === "string" && language.trim()) {
-            formData.append("language", language.trim());
-          }
-          if (typeof prompt === "string" && prompt.trim()) {
-            formData.append("prompt", prompt.trim());
-          }
-
-          const response = await fetch(endpoint, {
-            method: "POST",
-            headers: headers && typeof headers === "object" ? headers : {},
-            body: formData,
-            redirect: redirect === "error" ? "manual" : "follow",
-          });
-          if (response.type === "opaqueredirect") {
-            return { redirected: true };
-          }
-          const bodyText = await response.text();
-          return {
-            ok: response.ok,
-            status: response.status,
-            statusText: response.statusText,
-            contentType: response.headers.get("content-type") || "",
-            headers: Object.fromEntries(response.headers.entries()),
-            bodyText,
-          };
-        } catch (err) {
-          return {
-            fetchError: {
-              message: err?.message || "Fetch failed",
-              name: err?.name || "TypeError",
-              code: err?.code,
-              causeCode: err?.cause?.code,
-            },
-          };
-        }
-      }
-    );
+    require("./selfHostedTranscriptionProxy").registerSelfHostedTranscriptionProxy(ipcMain);
 
     // Gemini's Interactions API takes JSON with inline base64 audio, not
     // OpenAI-compatible multipart, so batch transcription is proxied through main.
@@ -9913,7 +9852,9 @@ class IPCHandlers {
 
       const transcribeChunk = async () => {
         if (meetingConnectionOptions?.provider === "self-hosted") {
-          const baseUrl = String(meetingRemoteUrl || "").trim().replace(/\/+$/, "");
+          const baseUrl = String(meetingRemoteUrl || "")
+            .trim()
+            .replace(/\/+$/, "");
           if (!baseUrl) {
             return { success: false, text: "" };
           }
@@ -9936,7 +9877,9 @@ class IPCHandlers {
           });
           if (!response.ok) {
             const errText = await response.text().catch(() => "");
-            throw new Error(`Self-hosted STT error (${response.status}): ${errText || response.statusText}`);
+            throw new Error(
+              `Self-hosted STT error (${response.status}): ${errText || response.statusText}`
+            );
           }
           const data = await response.json();
           return { success: true, text: typeof data?.text === "string" ? data.text : "" };

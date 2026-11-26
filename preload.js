@@ -589,6 +589,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   proxyTinfoilTranscription: (data) => ipcRenderer.invoke("proxy-tinfoil-transcription", data),
   proxySelfHostedTranscription: (data) =>
     ipcRenderer.invoke("proxy-self-hosted-transcription", data),
+  cancelSelfHostedTranscription: (requestId) =>
+    ipcRenderer.send("cancel-self-hosted-transcription", requestId),
 
   // Custom endpoint API keys
   getSelfHostedSttHeaders: () => ipcRenderer.invoke("get-self-hosted-stt-headers"),

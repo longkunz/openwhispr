@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { buildApiUrl } from "../config/constants";
+import { requestSelfHostedBatch } from "../helpers/selfHostedBatchRequest.js";
 import { selfHostedSttRequest } from "../helpers/selfHostedSttHeaders.js";
 import { getSettings } from "../stores/settingsStore";
 import { analyserRms } from "../utils/audioLevel";
 import { getBaseLanguageCode } from "../utils/languageSupport";
 import { useToast } from "../components/ui/useToast";
-
-function buildTranscriptionUrl(rawUrl: string): string {
-  const base = rawUrl.trim().replace(/\/+$/, "");
-  if (!base) return "";
-  return base.endsWith("/audio/transcriptions") ? base : `${base}/audio/transcriptions`;
-}
 
 export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: string) => void) {
   const { t } = useTranslation();
@@ -20,6 +16,10 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
+  const mountedRef = useRef(false);
+  const busyRef = useRef(false);
+  const startGenerationRef = useRef(0);
+  const transcriptionAbortRef = useRef<AbortController | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -42,12 +42,22 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mountedRef.current = false;
+      busyRef.current = false;
+      startGenerationRef.current += 1;
+      transcriptionAbortRef.current?.abort();
+      const recorder = mediaRecorderRef.current;
+      if (recorder) {
+        recorder.onstop = null;
+        recorder.ondataavailable = null;
         try {
-          mediaRecorderRef.current.stop();
+          if (recorder.state !== "inactive") recorder.stop();
         } catch {}
       }
+      mediaRecorderRef.current = null;
+      chunksRef.current = [];
       stopTracks();
     };
   }, [stopTracks]);
@@ -59,11 +69,13 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
   }, []);
 
   const transcribeAudioBlob = useCallback(
-    async (noteId: number, blob: Blob) => {
+    async (noteId: number, blob: Blob, signal: AbortSignal) => {
       const state = getSettings();
-      const endpoint = buildTranscriptionUrl(
-        state.remoteTranscriptionUrl || state.meetingRemoteTranscriptionUrl || ""
-      );
+      const endpoint = (
+        state.remoteTranscriptionUrl ||
+        state.meetingRemoteTranscriptionUrl ||
+        ""
+      ).trim();
       if (!endpoint) {
         toast({
           title: t("settingsPage.transcription.modes.selfHosted"),
@@ -81,50 +93,23 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
             ? "wav"
             : "webm";
 
-      const formData = new FormData();
-      formData.append("file", blob, `voice-note.${ext}`);
-      if (state.remoteTranscriptionModel?.trim()) {
-        formData.append("model", state.remoteTranscriptionModel.trim());
-      }
       const language = getBaseLanguageCode(state.preferredLanguage);
-      if (language && language !== "auto") {
-        formData.append("language", language);
-      }
-
       const { headers, redirect } = selfHostedSttRequest(state.selfHostedSttHeaders?.dictation, {});
-      let data: { text?: unknown } | null = null;
-      if (typeof window !== "undefined" && window.electronAPI?.proxySelfHostedTranscription) {
-        const proxyResult = await window.electronAPI.proxySelfHostedTranscription({
-          endpoint,
-          headers,
-          redirect,
-          audioBuffer: await blob.arrayBuffer(),
-          fileName: `voice-note.${ext}`,
-          mimeType: blob.type || "audio/webm",
-          model: state.remoteTranscriptionModel?.trim() || undefined,
-          language: language && language !== "auto" ? language : undefined,
-        });
-        if (proxyResult?.fetchError) {
-          throw new Error(proxyResult.fetchError.message || "Failed to connect to server");
-        }
-        if (!proxyResult?.ok) {
-          throw new Error(proxyResult?.bodyText || `HTTP ${proxyResult?.status ?? 0}`);
-        }
-        data = JSON.parse(proxyResult.bodyText || "{}");
-      } else {
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers,
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const errText = await response.text().catch(() => "");
-          throw new Error(errText || `HTTP ${response.status}`);
-        }
-
-        data = await response.json();
-      }
+      const response = await requestSelfHostedBatch({
+        endpoint: buildApiUrl(endpoint, "/audio/transcriptions"),
+        audio: blob,
+        fileName: `voice-note.${ext}`,
+        headers,
+        redirect,
+        model: state.remoteTranscriptionModel?.trim() || undefined,
+        language: language && language !== "auto" ? language : undefined,
+        signal,
+      });
+      if (response.type === "opaqueredirect") throw new Error("Self-hosted redirect refused");
+      if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+      const data = JSON.parse((await response.text()) || "{}") as { text?: unknown };
+      signal.throwIfAborted();
+      if (!mountedRef.current) return;
 
       const text = typeof data?.text === "string" ? data.text.trim() : "";
       if (text) {
@@ -136,12 +121,14 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
 
   const startRecording = useCallback(
     async (noteId: number) => {
-      if (isRecording || isProcessing) return;
+      if (!mountedRef.current || busyRef.current) return;
 
       const state = getSettings();
-      const endpoint = buildTranscriptionUrl(
-        state.remoteTranscriptionUrl || state.meetingRemoteTranscriptionUrl || ""
-      );
+      const endpoint = (
+        state.remoteTranscriptionUrl ||
+        state.meetingRemoteTranscriptionUrl ||
+        ""
+      ).trim();
       if (!endpoint) {
         toast({
           title: t("settingsPage.transcription.modes.selfHosted"),
@@ -151,8 +138,14 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
         return;
       }
 
+      busyRef.current = true;
+      const generation = ++startGenerationRef.current;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (!mountedRef.current || generation !== startGenerationRef.current) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
         streamRef.current = stream;
         chunksRef.current = [];
         activeNoteIdRef.current = noteId;
@@ -173,7 +166,9 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
             ? "audio/webm"
             : "";
 
-        const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+        const recorder = mimeType
+          ? new MediaRecorder(stream, { mimeType })
+          : new MediaRecorder(stream);
         mediaRecorderRef.current = recorder;
 
         recorder.ondataavailable = (event) => {
@@ -183,6 +178,7 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
         };
 
         recorder.onstop = async () => {
+          if (!mountedRef.current) return;
           const targetNoteId = activeNoteIdRef.current;
           const chunks = chunksRef.current;
           chunksRef.current = [];
@@ -192,21 +188,32 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
           setRecordingNoteId(null);
           setRecordingStartedAt(null);
 
-          if (!targetNoteId || chunks.length === 0) return;
+          if (!targetNoteId || chunks.length === 0) {
+            busyRef.current = false;
+            return;
+          }
           const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
-          if (blob.size === 0) return;
+          if (blob.size === 0) {
+            busyRef.current = false;
+            return;
+          }
 
           setIsProcessing(true);
+          const controller = new AbortController();
+          transcriptionAbortRef.current = controller;
           try {
-            await transcribeAudioBlob(targetNoteId, blob);
+            await transcribeAudioBlob(targetNoteId, blob, controller.signal);
           } catch (error) {
+            if (!mountedRef.current || controller.signal.aborted) return;
             toast({
               title: t("common.error", "Error"),
               description: error instanceof Error ? error.message : String(error),
               variant: "destructive",
             });
           } finally {
-            setIsProcessing(false);
+            transcriptionAbortRef.current = null;
+            busyRef.current = false;
+            if (mountedRef.current) setIsProcessing(false);
           }
         };
 
@@ -215,6 +222,8 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
         setRecordingNoteId(noteId);
         setIsRecording(true);
       } catch (error) {
+        if (!mountedRef.current || generation !== startGenerationRef.current) return;
+        busyRef.current = false;
         stopTracks();
         setIsRecording(false);
         setRecordingNoteId(null);
@@ -226,14 +235,16 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
         });
       }
     },
-    [isProcessing, isRecording, stopTracks, t, toast, transcribeAudioBlob]
+    [stopTracks, t, toast, transcribeAudioBlob]
   );
 
   const stopRecording = useCallback(async () => {
+    startGenerationRef.current += 1;
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       recorder.stop();
     } else {
+      busyRef.current = false;
       stopTracks();
       setIsRecording(false);
       setRecordingNoteId(null);

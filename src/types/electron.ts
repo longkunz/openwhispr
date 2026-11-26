@@ -2966,7 +2966,9 @@ declare global {
         language?: string;
         prompt?: string;
       }) => Promise<ProxyTranscriptionResult>;
+      cancelSelfHostedTranscription?: (requestId: string) => void;
       proxySelfHostedTranscription?: (data: {
+        requestId: string;
         endpoint: string;
         headers?: Record<string, string>;
         redirect?: "error" | "follow";

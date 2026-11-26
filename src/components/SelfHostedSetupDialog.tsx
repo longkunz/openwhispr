@@ -33,8 +33,7 @@ export function SelfHostedSetupDialog() {
   } = useSettingsStore();
 
   const [dismissed, setDismissed] = useState(
-    () =>
-      Boolean(remoteTranscriptionUrl.trim()) || localStorage.getItem(SKIPPED_KEY) === "true"
+    () => Boolean(remoteTranscriptionUrl.trim()) || localStorage.getItem(SKIPPED_KEY) === "true"
   );
 
   const open = !dismissed;
@@ -44,6 +43,10 @@ export function SelfHostedSetupDialog() {
     if (!trimmedUrl) return;
     if (!uploadRemoteTranscriptionUrl.trim()) {
       setUploadRemoteTranscriptionUrl(trimmedUrl);
+      setSelfHostedSttHeaders(
+        "upload",
+        selfHostedSttHeaders.dictation.map((row) => ({ ...row }))
+      );
       if (remoteTranscriptionModel.trim() && !uploadRemoteTranscriptionModel.trim()) {
         setUploadRemoteTranscriptionModel(remoteTranscriptionModel.trim());
       }
