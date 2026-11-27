@@ -86,8 +86,39 @@ async function setup(t, url = "https://speech.example/v1?token=abc") {
     received,
     transcribed,
     window,
+    vite,
   };
 }
+
+test("panel release waits through mic permission, recording and transcription", async (t) => {
+  const context = await setup(t);
+  const { prepareControlPanelRelease } = await context.vite.ssrLoadModule(
+    "/utils/controlPanelRelease.ts"
+  );
+  assert.equal(await prepareControlPanelRelease(), true);
+  const permission = deferred();
+  navigator.mediaDevices.getUserMedia = () => permission.promise;
+  let start;
+  await React.act(async () => {
+    start = context.hook.startRecording(7);
+  });
+  assert.equal(await prepareControlPanelRelease(), false);
+  await React.act(async () => {
+    permission.resolve({ getTracks: () => [{ stop() {} }] });
+    await start;
+  });
+  assert.equal(await prepareControlPanelRelease(), false);
+  const transcription = deferred();
+  context.window.electronAPI.proxySelfHostedTranscription = () => transcription.promise;
+  await React.act(async () => context.hook.stopRecording());
+  assert.equal(await prepareControlPanelRelease(), false);
+  await React.act(async () => {
+    transcription.resolve({ ok: true, bodyText: '{"text":"Saved words"}' });
+    await context.recorders[0].stopped;
+  });
+  assert.equal(await prepareControlPanelRelease(), true);
+  assert.deepEqual(context.transcribed, [[7, "Saved words"]]);
+});
 
 test("a mic permission result arriving after unmount releases its tracks without recording", async (t) => {
   const context = await setup(t);

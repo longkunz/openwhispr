@@ -4,19 +4,7 @@ import { Loader2, Mic, Square } from "../icons";
 import { cn } from "../lib/utils";
 import { LiveWaveform } from "../ui/LiveWaveform";
 import { GRADIENT_CIRCLE } from "../ui/gradientCircle";
-import { analyserRms } from "../../utils/audioLevel";
 import { formatMmSs } from "../../utils/formatDuration";
-import { getMicAnalyser, useMeetingRecordingStore } from "../../stores/meetingRecordingStore";
-
-// Module-level buffer: there is a single meeting mic analyser at a time.
-const micLevelBuf: { current: Float32Array<ArrayBuffer> | null } = { current: null };
-
-function readMeetingMicLevel(): number {
-  const analyser = getMicAnalyser();
-  if (!analyser) return useMeetingRecordingStore.getState().currentMicLevel;
-  return analyserRms(analyser, micLevelBuf);
-}
-
 // Same near-opaque surface the ask bar wears while recording, so the two capsules match.
 const RECORDING_SURFACE = "bg-surface-2/95 shadow-(--shadow-glass)";
 
@@ -65,8 +53,7 @@ export default function NoteRecordControl({
   // Elapsed time comes from the session's start timestamp rather than a tick
   // count: this control remounts whenever the user switches notes, and counted
   // ticks would restart at zero (and drift while the window is throttled).
-  const storeStartedAt = useMeetingRecordingStore((s) => s.recordingStartedAt);
-  const startedAt = startedAtProp ?? storeStartedAt;
+  const startedAt = startedAtProp;
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -108,11 +95,7 @@ export default function NoteRecordControl({
           >
             <Square size={8} fill="currentColor" />
           </span>
-          <LiveWaveform
-            readLevel={readLevelProp ?? readMeetingMicLevel}
-            bars={10}
-            className="h-3.5 flex-1"
-          />
+          <LiveWaveform readLevel={readLevelProp ?? (() => 0)} bars={10} className="h-3.5 flex-1" />
           <span className="shrink-0 text-xs font-medium tabular-nums text-foreground/85">
             {formatMmSs(elapsed)}
           </span>

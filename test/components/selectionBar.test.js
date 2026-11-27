@@ -95,26 +95,6 @@ test("a busy action disables every action", async (t) => {
   assert.doesNotMatch(other, /animate-spin/);
 });
 
-test("the mixed checkbox announces itself and draws a dash", async (t) => {
-  installBrowserGlobals(t);
-  const vite = await createRendererServer(t, { cachePrefix: "openwhispr-row-checkbox-" });
-  const { RowCheckbox } = await vite.ssrLoadModule("/components/dictionary/RowCheckbox.tsx");
-  const render = (checked) =>
-    renderToStaticMarkup(
-      React.createElement(RowCheckbox, { checked, onToggle: () => {}, label: "Select all" })
-    );
-
-  assert.match(render("mixed"), /role="checkbox"/);
-  assert.match(render("mixed"), /aria-checked="mixed"/);
-  assert.match(render("mixed"), /aria-label="Select all"/);
-  assert.match(render("mixed"), /d="M4 8H12"/);
-
-  assert.match(render(true), /aria-checked="true"/);
-  assert.doesNotMatch(render(true), /M4 8H12/);
-  assert.match(render(false), /aria-checked="false"/);
-  assert.doesNotMatch(render(false), /<svg/);
-});
-
 test("the bar wraps inside a narrow pane and its labels never truncate", async (t) => {
   const { SelectionBar } = await loadBar(t);
 

@@ -6,11 +6,11 @@ const { spawn } = require("child_process");
  * @param {ChildProcess} proc - The process to kill
  * @param {string} signal - Signal name ('SIGTERM' or 'SIGKILL')
  */
-function killProcess(proc, signal = "SIGTERM") {
+function killProcess(proc, signal = "SIGTERM", platform = process.platform) {
   if (!proc || proc.exitCode !== null) return;
 
   try {
-    if (process.platform === "win32") {
+    if (platform === "win32") {
       if (signal === "SIGKILL") {
         const taskkill = spawn("taskkill", ["/pid", proc.pid.toString(), "/f", "/t"], {
           stdio: "ignore",

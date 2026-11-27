@@ -38,6 +38,7 @@ async function renderRecordControl(t, { elapsedMs, isRecording = true, ...props 
   return renderToStaticMarkup(
     createElement(mod.default, {
       isRecording,
+      startedAt: elapsedMs == null ? null : Date.now() - elapsedMs,
       isProcessing: false,
       onStart: () => {},
       onStop: () => {},

@@ -8,8 +8,10 @@ for (const streamingCommit of [false, true]) {
       cachePrefix: "openwhispr-preview-finalization-test-",
       settingsKey: "__previewFinalizationSettings",
       settings: {
-        useLocalWhisper: true,
-        localTranscriptionProvider: "nvidia",
+        useLocalWhisper: false,
+        transcriptionMode: "self-hosted",
+        remoteTranscriptionUrl: "https://stt.example/v1",
+        remoteTranscriptionModel: "vietasr",
         preferredLanguage: "en",
         allowOpenAIFallback: false,
       },
@@ -21,11 +23,11 @@ for (const streamingCommit of [false, true]) {
       calls.push("stop-preview");
       return { success: true, streamed: false, text: "incomplete preview" };
     };
-    window.electronAPI.transcribeLocalParakeet = async (buffer, options) => {
+    window.electronAPI.proxySelfHostedTranscription = async (data) => {
       calls.push("final-decode");
-      assert.deepEqual(new Uint8Array(buffer), bytes);
-      assert.equal(options.model, "orukeet-v0.1.0");
-      return { success: true, text: "complete recording" };
+      assert.deepEqual(new Uint8Array(data.audioBuffer), bytes);
+      assert.equal(data.model, "vietasr");
+      return { ok: true, bodyText: '{"text":"complete recording"}' };
     };
     let finalResult;
     const manager = createManager({
@@ -43,7 +45,7 @@ for (const streamingCommit of [false, true]) {
       async processAudio(blob, metadata) {
         assert.strictEqual(blob, recording);
         assert.equal(metadata.streamedText, undefined);
-        finalResult = await this.processWithLocalParakeet(blob, "orukeet-v0.1.0", metadata);
+        finalResult = await this.processVietAsrFallback(blob);
       },
     });
 

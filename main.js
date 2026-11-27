@@ -1,7 +1,6 @@
 // Chromium picks the display backend before JS runs, so appendSwitch is too
 // late — the flag has to come from a relaunch.
 const { XWAYLAND_FLAG, shouldForceXWayland } = require("./src/helpers/xwayland");
-const { createHotkeyRepeatGate } = require("./src/helpers/hotkeyRepeatGate");
 const { shouldDisableGpuCompositing } = require("./src/helpers/linuxGpuCompositing");
 
 if (shouldForceXWayland(process.argv)) {
@@ -20,11 +19,9 @@ const {
   BrowserWindow,
   dialog,
   ipcMain,
-  net,
   session,
 } = require("electron");
 const path = require("path");
-const http = require("http");
 const tls = require("tls");
 require("dotenv").config({ path: path.join(__dirname, ".env") });
 
@@ -43,13 +40,7 @@ try {
 }
 
 const VALID_CHANNELS = new Set(["development", "staging", "production"]);
-const DEFAULT_OAUTH_PROTOCOL_BY_CHANNEL = {
-  development: "openwhispr-dev",
-  staging: "openwhispr-staging",
-  production: "openwhispr",
-};
 const BASE_WINDOWS_APP_ID = "com.gizmolabs.openwhispr";
-const DEFAULT_AUTH_BRIDGE_PORT = 5199;
 
 function isElectronBinaryExec() {
   const execPath = (process.execPath || "").toLowerCase();
@@ -141,122 +132,6 @@ if (process.platform === "win32") {
   app.setAppUserModelId(windowsAppId);
 }
 
-function getOAuthProtocol() {
-  const fromEnv = (process.env.VITE_OPENWHISPR_PROTOCOL || process.env.OPENWHISPR_PROTOCOL || "")
-    .trim()
-    .toLowerCase();
-
-  if (/^[a-z][a-z0-9+.-]*$/.test(fromEnv)) {
-    return fromEnv;
-  }
-
-  return (
-    DEFAULT_OAUTH_PROTOCOL_BY_CHANNEL[APP_CHANNEL] || DEFAULT_OAUTH_PROTOCOL_BY_CHANNEL.production
-  );
-}
-
-const OAUTH_PROTOCOL = getOAuthProtocol();
-
-const { registerLinuxUrlSchemeHandler } = require("./src/helpers/linuxUrlSchemeHandler");
-
-function shouldRegisterProtocolWithAppArg() {
-  return Boolean(process.defaultApp) || isElectronBinaryExec();
-}
-
-function getDefaultHtmlHandler() {
-  try {
-    const { execFileSync } = require("child_process");
-    return (
-      execFileSync("xdg-mime", ["query", "default", "text/html"], {
-        encoding: "utf8",
-        timeout: 3000,
-      }).trim() || null
-    );
-  } catch {
-    return null;
-  }
-}
-
-function restoreHtmlHandlerIfChanged(original) {
-  try {
-    const { execFileSync } = require("child_process");
-    const current = execFileSync("xdg-mime", ["query", "default", "text/html"], {
-      encoding: "utf8",
-      timeout: 3000,
-    }).trim();
-    if (current && current !== original) {
-      execFileSync("xdg-mime", ["default", original, "text/html"], { timeout: 3000 });
-    }
-  } catch {
-    // xdg-mime unavailable or failed
-  }
-}
-
-// True source of truth for whether openwhispr:// resolves on Linux — the same
-// MIME database xdg-open consults. Returns true for deb/rpm/flatpak/AUR installs
-// (scheme registered via the packaged .desktop MimeType; registerLinuxUrlSchemeHandler
-// first takes it back from an AppImage/tar.gz entry) and false for AppImage/tar.gz
-// runs whose own registration failed, so we never enable a dead-end OAuth flow.
-// Used to recover from setAsDefaultProtocolClient's KDE false negative.
-function isOAuthSchemeRegistered() {
-  if (process.platform !== "linux") return false;
-  try {
-    const { execFileSync } = require("child_process");
-    const handler = execFileSync(
-      "xdg-mime",
-      ["query", "default", `x-scheme-handler/${OAUTH_PROTOCOL}`],
-      { encoding: "utf8", timeout: 3000 }
-    ).trim();
-    return handler.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-// In development, always include the app path argument so macOS/Windows/Linux
-// can launch the project app instead of opening bare Electron.
-function getProtocolAppArgs() {
-  if (!shouldRegisterProtocolWithAppArg()) return [];
-  return [process.argv[1] ? path.resolve(process.argv[1]) : path.resolve(".")];
-}
-
-// Register custom protocol for OAuth callbacks.
-function registerOpenWhisprProtocol() {
-  const protocol = OAUTH_PROTOCOL;
-  if (process.platform === "darwin" && app.isDefaultProtocolClient(protocol)) return true;
-  const htmlHandler = process.platform === "linux" ? getDefaultHtmlHandler() : null;
-  const appArgs = getProtocolAppArgs();
-
-  let result;
-  if (appArgs.length > 0) {
-    result = app.setAsDefaultProtocolClient(protocol, process.execPath, appArgs);
-  } else {
-    result = app.setAsDefaultProtocolClient(protocol);
-  }
-
-  if (htmlHandler) {
-    restoreHtmlHandlerIfChanged(htmlHandler);
-  }
-
-  return result;
-}
-
-// On Linux, setAsDefaultProtocolClient can only name open-whispr.desktop, which
-// AppImage and tar.gz installs don't have, so those (and development) register
-// their own handler entry first and skip it. Otherwise it runs as before, and
-// since it returns a false negative on KDE/Wayland, fall back to probing the
-// system MIME database for an actual handler. This keeps OAuth enabled where the
-// callback can resolve and correctly gated where it can't.
-const linuxSchemeHandler =
-  process.platform === "linux"
-    ? registerLinuxUrlSchemeHandler(OAUTH_PROTOCOL, getProtocolAppArgs())
-    : null;
-const protocolRegistered =
-  linuxSchemeHandler?.registered || registerOpenWhisprProtocol() || isOAuthSchemeRegistered();
-if (!protocolRegistered) {
-  console.warn(`[Auth] Failed to register ${OAUTH_PROTOCOL}:// protocol handler`);
-}
-
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {
@@ -298,31 +173,18 @@ const dockManager = require("./src/helpers/dockManager");
 const autoStart = require("./src/helpers/autoStart");
 const IPCHandlers = require("./src/helpers/ipcHandlers");
 const CliBridge = require("./src/helpers/cliBridge");
-const { createRegistryLoader } = require("./src/helpers/registryLoader");
 const { registerRegistryIpc } = require("./src/helpers/registryIpc");
-const { replaceRegistryData, bundledRegistryData } = require("./src/models/registryData.js");
-let registryLoader = null;
 let disposeRegistryIpc = null;
-const UpdateManager = require("./src/updater");
 const GlobeKeyManager = require("./src/helpers/globeKeyManager");
-const DevServerManager = require("./src/helpers/devServerManager");
 const WindowsKeyManager = require("./src/helpers/windowsKeyManager");
 const LinuxKeyManager = require("./src/helpers/linuxKeyManager");
 const TextEditMonitor = require("./src/helpers/textEditMonitor");
 const SelectionManager = require("./src/helpers/selectionManager");
 const { PermissionGuideManager } = require("./src/helpers/permissionGuideManager");
-const { AgentWindowManager } = require("./src/helpers/agentWindowManager");
-const MeetingProcessDetector = require("./src/helpers/meetingProcessDetector");
-const AudioActivityDetector = require("./src/helpers/audioActivityDetector");
-const {
-  collectAudioCaptureHelperPids,
-  createExcludedProcessIdProvider,
-} = require("./src/helpers/electronProcessIds");
 const AudioTapManager = require("./src/helpers/audioTapManager");
 const LinuxPortalAudioManager = require("./src/helpers/linuxPortalAudioManager");
 const WindowsLoopbackAudioManager = require("./src/helpers/windowsLoopbackAudioManager");
 const MeetingAecManager = require("./src/helpers/meetingAecManager");
-const MeetingDetectionEngine = require("./src/helpers/meetingDetectionEngine");
 const { createManagedMeetingPolicy } = require("./src/helpers/managedMeetingPolicy");
 const { createManagedDevicePolicy } = require("./src/helpers/managedDevicePolicy");
 const { createMeetingAuditLog } = require("./src/helpers/meetingAuditLog");
@@ -341,7 +203,6 @@ let hotkeyManager = null;
 let databaseManager = null;
 let clipboardManager = null;
 let trayManager = null;
-let updateManager = null;
 let managedDevicePolicy = null;
 let meetingAuditLog = null;
 let globeKeyManager = null;
@@ -359,26 +220,6 @@ let cliBridge = null;
 let globeKeyAlertShown = false;
 let macAccessibilityFeaturesReady = false;
 let startMacAccessibilityFeatures = null;
-let authBridgeServer = null;
-let pendingNoteCloudId = null;
-let pendingNoteRetryTimer = null;
-let pendingNoteRetryCount = 0;
-
-function parseAuthBridgePort() {
-  const raw = (process.env.OPENWHISPR_AUTH_BRIDGE_PORT || "").trim();
-  if (!raw) return DEFAULT_AUTH_BRIDGE_PORT;
-
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
-    return DEFAULT_AUTH_BRIDGE_PORT;
-  }
-
-  return parsed;
-}
-
-const AUTH_BRIDGE_HOST = "127.0.0.1";
-const AUTH_BRIDGE_PORT = parseAuthBridgePort();
-const AUTH_BRIDGE_PATH = "/oauth/callback";
 
 // Set up PATH for production builds to find system tools (whisper.cpp, ffmpeg)
 function setupProductionPath() {
@@ -457,15 +298,6 @@ function initializeCoreManagers() {
     if (details.type !== "GPU") return;
     debugLogger.warn("GPU process gone", { reason: details.reason, exitCode: details.exitCode });
   });
-  // Registration runs before app ready, when the logger cannot write its file yet.
-  if (linuxSchemeHandler?.reason) {
-    debugLogger.warn("Could not register the Linux URL scheme handler entry", {
-      protocol: OAUTH_PROTOCOL,
-      reason: linuxSchemeHandler.reason,
-      protocolRegistered,
-    });
-  }
-
   environmentManager = new EnvironmentManager();
   const uiLanguage = environmentManager.getUiLanguage(app.getLocale());
   changeLanguage(uiLanguage);
@@ -487,13 +319,12 @@ function initializeCoreManagers() {
   if (bootAccountId) databaseManager.setActiveAccountId(bootAccountId, { atLaunch: true });
   databaseManager.ensureAccountDefaultFolders();
   clipboardManager = new ClipboardManager();
-  const meetingProcessDetector = new MeetingProcessDetector();
   managedDevicePolicy = createManagedDevicePolicy();
   const managedMeetingPolicy = createManagedMeetingPolicy({
     getSnapshot: () => managedDevicePolicy.getSnapshot(),
   });
   meetingAuditLog = createMeetingAuditLog({
-    // The effective policy (MDM merged with the workspace) lives in the IPC
+    // The effective device policy lives in the IPC
     // handlers below; no recording starts before they exist.
     isEnabled: () => ipcHandlers?.effectivePolicyManager?.getCurrent().managed === true,
     getConfiguredPath: () => managedDevicePolicy.getSnapshot().auditLogPath,
@@ -502,33 +333,6 @@ function initializeCoreManagers() {
     logger: debugLogger,
   });
   meetingAuditLog.recoverInterrupted();
-  meetingDetectionEngine = new MeetingDetectionEngine(
-    null,
-    meetingProcessDetector,
-    new AudioActivityDetector(
-      // The capture-helper managers are created a few lines below; the provider
-      // is only invoked on mic events, long after initialization completes.
-      createExcludedProcessIdProvider(() =>
-        collectAudioCaptureHelperPids([
-          audioTapManager,
-          linuxPortalAudioManager,
-          windowsLoopbackAudioManager,
-        ])
-      ),
-      () => meetingProcessDetector.getDetectedProcesses().length > 0
-    ),
-    windowManager,
-    databaseManager,
-    {
-      isMeetingRecordingDisabled: managedMeetingPolicy.isMeetingRecordingDisabled,
-      onStartRefused: (reason, trigger) => meetingAuditLog.recordingRefused({ reason, trigger }),
-    }
-  );
-  windowManager.meetingDetectionEngine = meetingDetectionEngine;
-  updateManager = new UpdateManager({
-    getPolicy: (options) => ipcHandlers?.getUpdatePolicy?.(options) ?? { success: false },
-  });
-  updateManager.setWindowManager(windowManager);
   windowsKeyManager = new WindowsKeyManager();
   linuxKeyManager = new LinuxKeyManager();
   textEditMonitor = new TextEditMonitor();
@@ -536,9 +340,6 @@ function initializeCoreManagers() {
   audioTapManager = new AudioTapManager();
   linuxPortalAudioManager = new LinuxPortalAudioManager();
   windowsLoopbackAudioManager = new WindowsLoopbackAudioManager();
-  // Warm the capability cache off the hot path so the first meeting start
-  // doesn't pay the probe spawn. No-ops on non-Windows.
-  windowsLoopbackAudioManager.getCapability().catch(() => {});
   cleanupOrphanedLinuxRestoreToken();
   syncAutoStartEntry();
   meetingAecManager = new MeetingAecManager();
@@ -547,7 +348,6 @@ function initializeCoreManagers() {
   windowManager.windowsKeyManager = windowsKeyManager;
   windowManager.linuxKeyManager = linuxKeyManager;
   windowManager.permissionGuide = new PermissionGuideManager(windowManager);
-  windowManager.agentWindow = new AgentWindowManager(windowManager);
   if (process.platform === "linux") {
     windowManager.hotkeyManager.nativeListenerProbe = () => linuxKeyManager.checkAvailability();
   } else if (process.platform === "win32") {
@@ -560,7 +360,6 @@ function initializeCoreManagers() {
     databaseManager,
     clipboardManager,
     windowManager,
-    updateManager,
     windowsKeyManager,
     linuxKeyManager,
     textEditMonitor,
@@ -574,8 +373,6 @@ function initializeCoreManagers() {
     windowsLoopbackAudioManager,
     meetingAecManager,
     getTrayManager: () => trayManager,
-    oauthProtocolRegistered: protocolRegistered,
-    oauthProtocol: OAUTH_PROTOCOL,
   });
 }
 
@@ -625,424 +422,6 @@ function initializeDeferredManagers() {
       });
     });
   }
-
-  meetingDetectionEngine.start();
-}
-
-let pendingEnterpriseAudioTest = null;
-// The control panel acts on each link once, so a link it can't use never
-// reopens Settings on a later mount; Settings still reads it until consumed.
-let enterpriseAudioTestClaimed = false;
-ipcMain.handle("get-pending-enterprise-audio-test", (_event, consume = false) => {
-  const pending = pendingEnterpriseAudioTest;
-  if (consume) pendingEnterpriseAudioTest = null;
-  return pending;
-});
-ipcMain.handle("claim-enterprise-audio-test", () => {
-  if (enterpriseAudioTestClaimed) return null;
-  enterpriseAudioTestClaimed = true;
-  return pendingEnterpriseAudioTest;
-});
-function handleEnterpriseAudioLink(url) {
-  const request = require("./src/helpers/enterpriseAudioDeepLink").parseEnterpriseAudioDeepLink(
-    url,
-    OAUTH_PROTOCOL
-  );
-  if (!request) return false;
-  pendingEnterpriseAudioTest = request;
-  enterpriseAudioTestClaimed = false;
-  void windowManager?.showControlPanel();
-  windowManager?.controlPanelWindow?.webContents.send("enterprise-audio-test-requested");
-  return true;
-}
-
-app.on("open-url", (event, url) => {
-  event.preventDefault();
-  if (!url.startsWith(`${OAUTH_PROTOCOL}://`)) return;
-  if (handleAffiliateDeepLink(url)) return;
-
-  if (url.includes("upgrade-success")) {
-    handleUpgradeDeepLink();
-    return;
-  }
-
-  if (handleEnterpriseAudioLink(url)) return;
-
-  if (isNoteDeepLink(url)) {
-    void handleNoteDeepLink(url);
-    return;
-  }
-
-  if (isInvitationDeepLink(url)) {
-    handleInvitationDeepLink(url);
-    return;
-  }
-
-  void handleOAuthDeepLink(url);
-
-  windowManager?.showControlPanel();
-});
-
-const pendingAffiliateDeepLinks = [];
-let affiliateWindowReady = false;
-
-async function flushPendingAffiliateDeepLink() {
-  if (!pendingAffiliateDeepLinks.length || !affiliateWindowReady || !windowManager) return;
-  const urls = pendingAffiliateDeepLinks.splice(0);
-  try {
-    const affiliateLinks = require("./src/helpers/affiliateLinks");
-    let captured = false;
-    for (const url of urls) {
-      if (affiliateLinks.capture(url, OAUTH_PROTOCOL)) captured = true;
-    }
-    if (!captured) return;
-    await windowManager.createControlPanelWindow();
-    windowManager.showControlPanel();
-    if (isLiveWindow(windowManager.controlPanelWindow)) {
-      windowManager.controlPanelWindow.webContents.send("affiliate-link");
-    }
-  } catch (error) {
-    debugLogger?.error("Creator link window could not be opened", { error: error.message });
-  }
-}
-
-function handleAffiliateDeepLink(url) {
-  try {
-    if (url.length > 4096) return false;
-    const parsed = new URL(url);
-    if (parsed.protocol !== `${OAUTH_PROTOCOL}:` || parsed.hostname !== "affiliate") return false;
-    // Packaged configuration may not be loaded when macOS first delivers open-url.
-    pendingAffiliateDeepLinks.push(url);
-    void flushPendingAffiliateDeepLink();
-    return true;
-  } catch {
-    debugLogger?.error("Creator link could not be saved");
-    return false;
-  }
-}
-
-function isInvitationDeepLink(url) {
-  return url.slice(`${OAUTH_PROTOCOL}://`.length).startsWith("invitations/");
-}
-
-// Deep links can arrive before windowManager exists (cold start) or before the
-// renderer has mounted its listener. The token is stashed here and the renderer
-// pulls it via `get-pending-invitation-token` on mount; the push below is a
-// best-effort fast path for an already-running app.
-let pendingInvitationDeepLinkToken = null;
-
-ipcMain.handle("get-pending-invitation-token", () => {
-  const token = pendingInvitationDeepLinkToken;
-  pendingInvitationDeepLinkToken = null;
-  return token;
-});
-
-function isNoteDeepLink(url) {
-  return url.slice(`${OAUTH_PROTOCOL}://`.length).startsWith("notes/");
-}
-
-function parseNoteCloudId(deepLinkUrl) {
-  try {
-    const match = deepLinkUrl.match(/notes\/([^/?#]+)/);
-    const cloudId = match?.[1] ? decodeURIComponent(match[1]) : "";
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cloudId)
-      ? cloudId
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function clearPendingNoteDeepLink() {
-  clearTimeout(pendingNoteRetryTimer);
-  pendingNoteRetryTimer = null;
-  pendingNoteCloudId = null;
-  pendingNoteRetryCount = 0;
-}
-
-async function flushPendingNoteDeepLink() {
-  if (!pendingNoteCloudId || !windowManager || !databaseManager) return;
-
-  try {
-    // Surface the panel on the first attempt only; retries just poll the
-    // database so they can't repeatedly steal focus.
-    if (pendingNoteRetryCount === 0) {
-      await windowManager.createControlPanelWindow();
-    }
-
-    const note = databaseManager.getNoteByCloudId(pendingNoteCloudId);
-    if (!note) {
-      // Cloud sync may still be hydrating during a cold launch. Retry briefly so
-      // the handoff can resolve a note pulled after the protocol event arrived.
-      pendingNoteRetryCount += 1;
-      if (pendingNoteRetryCount <= 10) {
-        clearTimeout(pendingNoteRetryTimer);
-        pendingNoteRetryTimer = setTimeout(() => {
-          void flushPendingNoteDeepLink();
-        }, 1000);
-      } else {
-        console.warn("Note deep link could not resolve a local note", {
-          cloudId: pendingNoteCloudId,
-        });
-        clearPendingNoteDeepLink();
-      }
-      return;
-    }
-
-    const payload = { noteId: note.id, folderId: note.folder_id ?? null };
-    clearPendingNoteDeepLink();
-    await windowManager.queueNoteNavigation(payload);
-  } catch (error) {
-    console.error("Note deep link failed:", error);
-    clearPendingNoteDeepLink();
-  }
-}
-
-async function handleNoteDeepLink(deepLinkUrl) {
-  const cloudId = parseNoteCloudId(deepLinkUrl);
-  if (!cloudId) {
-    console.warn("Invalid note deep link");
-    return;
-  }
-
-  clearPendingNoteDeepLink();
-  pendingNoteCloudId = cloudId;
-  await flushPendingNoteDeepLink();
-}
-
-function handleInvitationDeepLink(deepLinkUrl) {
-  try {
-    const match = deepLinkUrl.match(/invitations\/([^/?#]+)/);
-    const token = match?.[1];
-    if (!token) return;
-    pendingInvitationDeepLinkToken = token;
-    if (!windowManager) return;
-    if (isLiveWindow(windowManager.controlPanelWindow)) {
-      windowManager.showControlPanel();
-      // Best-effort fast path — the get-pending-invitation-token pull is the reliable path.
-      windowManager.controlPanelWindow.webContents.send("workspace-invitation-token", token);
-    } else {
-      windowManager.createControlPanelWindow();
-    }
-  } catch (error) {
-    console.error("Invitation deep link parse failed:", error);
-  }
-}
-
-function resolveAuthUrl() {
-  const fs = require("fs");
-  const envPath = path.join(__dirname, "src", "dist", "runtime-env.json");
-  let runtimeEnv = {};
-  try {
-    if (fs.existsSync(envPath)) runtimeEnv = JSON.parse(fs.readFileSync(envPath, "utf8"));
-  } catch {}
-  return (
-    process.env.AUTH_URL ||
-    process.env.VITE_AUTH_URL ||
-    runtimeEnv.VITE_AUTH_URL ||
-    "https://auth.openwhispr.com"
-  );
-}
-
-function getOauthCookieName() {
-  return process.env.NODE_ENV === "production"
-    ? "__Secure-openwhispr.session_token"
-    : "openwhispr.session_token";
-}
-
-// Older website builds send the signed cookie value as `?token=`; trade it
-// for the raw session.token the bearer plugin expects.
-async function exchangeSignedTokenForRawBearer(signedToken) {
-  try {
-    const res = await net.fetch(`${resolveAuthUrl()}/api/auth/get-session`, {
-      headers: { Cookie: `${getOauthCookieName()}=${signedToken}` },
-      signal: AbortSignal.timeout(5000),
-      useSessionCookies: false,
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data?.session?.token || null;
-  } catch (err) {
-    if (debugLogger) {
-      debugLogger.warn("Signed-token bearer exchange failed (non-fatal)", {
-        error: err?.message,
-      });
-    }
-    return null;
-  }
-}
-
-// One-time bridge for users upgrading from a build that injected the session
-// cookie into Electron's jar: exchange the existing cookie for a raw bearer
-// token, store it, and remove the cookie. Non-fatal — failures fall through
-// to the normal sign-in flow.
-async function migrateCookieToBearerToken() {
-  const tokenStore = require("./src/helpers/tokenStore");
-  if (tokenStore.get()) return;
-
-  const cookieName = getOauthCookieName();
-  const authUrl = resolveAuthUrl();
-
-  try {
-    const cookies = await session.defaultSession.cookies.get({ url: authUrl, name: cookieName });
-    if (!cookies.length) return;
-
-    const rawToken = await exchangeSignedTokenForRawBearer(cookies[0].value);
-    if (!rawToken) return;
-
-    tokenStore.set(rawToken);
-    await session.defaultSession.cookies.remove(authUrl, cookieName);
-    if (debugLogger) debugLogger.debug("Migrated cookie to bearer token");
-  } catch (err) {
-    if (debugLogger) {
-      debugLogger.warn("Cookie→bearer token migration failed (non-fatal)", {
-        error: err?.message,
-      });
-    }
-  }
-}
-
-// Persist the bearer token and reload the control panel so the renderer's
-// authClient sends `Authorization: Bearer <token>` on its next request.
-async function applySessionTokenAndRefresh(token) {
-  if (!token) return;
-  if (!isLiveWindow(windowManager?.controlPanelWindow)) return;
-
-  const tokenStore = require("./src/helpers/tokenStore");
-  tokenStore.set(token);
-
-  const appUrl = DevServerManager.getAppUrl(true);
-  if (appUrl) {
-    windowManager.controlPanelWindow.loadURL(appUrl);
-  } else {
-    const fileInfo = DevServerManager.getAppFilePath(true);
-    if (fileInfo) {
-      windowManager.controlPanelWindow.loadFile(fileInfo.path, { query: fileInfo.query });
-    }
-  }
-
-  if (debugLogger) {
-    debugLogger.debug("Applied bearer token and reloaded control panel", {
-      appChannel: APP_CHANNEL,
-      oauthProtocol: OAUTH_PROTOCOL,
-    });
-  }
-  windowManager.showControlPanel();
-}
-
-async function handleOAuthDeepLink(deepLinkUrl) {
-  try {
-    const parsed = new URL(deepLinkUrl);
-    const bearerToken = parsed.searchParams.get("bearer_token");
-    if (bearerToken) {
-      void applySessionTokenAndRefresh(bearerToken);
-      return;
-    }
-    const signedToken = parsed.searchParams.get("token");
-    if (!signedToken) return;
-    const rawToken = await exchangeSignedTokenForRawBearer(signedToken);
-    if (rawToken) void applySessionTokenAndRefresh(rawToken);
-  } catch (err) {
-    if (debugLogger) debugLogger.error("Failed to handle OAuth deep link:", err);
-  }
-}
-
-function handleUpgradeDeepLink() {
-  if (isLiveWindow(windowManager?.controlPanelWindow)) {
-    windowManager.controlPanelWindow.webContents.executeJavaScript(
-      'window.dispatchEvent(new Event("upgrade-success"))'
-    );
-    windowManager.showControlPanel();
-  }
-}
-
-function parseJsonBody(req) {
-  return new Promise((resolve, reject) => {
-    let raw = "";
-    req.on("data", (chunk) => {
-      raw += chunk;
-      if (raw.length > 32 * 1024) {
-        reject(new Error("Request body too large"));
-        req.destroy();
-      }
-    });
-    req.on("end", () => {
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch {
-        reject(new Error("Invalid JSON payload"));
-      }
-    });
-    req.on("error", reject);
-  });
-}
-
-function writeCorsHeaders(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-}
-
-function startAuthBridgeServer() {
-  if (APP_CHANNEL !== "development" || authBridgeServer) {
-    return;
-  }
-
-  authBridgeServer = http.createServer(async (req, res) => {
-    writeCorsHeaders(res);
-    if (req.method === "OPTIONS") {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    const requestUrl = new URL(req.url || "/", `http://${AUTH_BRIDGE_HOST}:${AUTH_BRIDGE_PORT}`);
-    if (requestUrl.pathname !== AUTH_BRIDGE_PATH) {
-      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("Not found");
-      return;
-    }
-
-    let token = requestUrl.searchParams.get("bearer_token") || requestUrl.searchParams.get("token");
-    if (!token && req.method === "POST") {
-      try {
-        const body = await parseJsonBody(req);
-        token = body?.bearer_token || body?.token || null;
-      } catch (error) {
-        res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
-        res.end(error.message || "Invalid request");
-        return;
-      }
-    }
-
-    if (!token) {
-      res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("Missing token");
-      return;
-    }
-
-    void applySessionTokenAndRefresh(token);
-
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(
-      "<html><body><h3>OpenWhispr sign-in complete.</h3><p>You can close this tab.</p></body></html>"
-    );
-  });
-
-  authBridgeServer.on("error", (error) => {
-    if (debugLogger) {
-      debugLogger.error("OAuth auth bridge server failed:", error);
-    }
-  });
-
-  authBridgeServer.listen(AUTH_BRIDGE_PORT, AUTH_BRIDGE_HOST, () => {
-    if (debugLogger) {
-      debugLogger.debug("OAuth auth bridge server started", {
-        url: `http://${AUTH_BRIDGE_HOST}:${AUTH_BRIDGE_PORT}${AUTH_BRIDGE_PATH}`,
-      });
-    }
-  });
 }
 
 // Startup restores the saved activation mode before any hotkey registers. Desktop
@@ -1097,22 +476,6 @@ async function startApp() {
   debugLogger = require("./src/helpers/debugLogger");
   debugLogger.ensureFileLogging();
 
-  // Only local signature/cache verification is awaited. Remote refresh starts
-  // later, so offline startup and settings migrations see a usable catalog.
-  const registryMetadata = require("./src/models/registryMetadata.json");
-  registryLoader = createRegistryLoader({
-    cachePath: path.join(app.getPath("userData"), "model-registry.json"),
-    bundledSnapshot: {
-      data: bundledRegistryData,
-      manifestVersion: registryMetadata.manifestVersion,
-    },
-    clientContract: registryMetadata.clientContract,
-    appVersion: app.getVersion(),
-    applySnapshot: (snapshot) => replaceRegistryData(snapshot),
-    onError: (error) =>
-      debugLogger.warn("Model registry update unavailable", { error: error.message }),
-  });
-  await registryLoader.start();
   disposeRegistryIpc = registerRegistryIpc(ipcMain, (channel, snapshot) => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send(channel, snapshot);
@@ -1131,17 +494,12 @@ async function startApp() {
   if (managedDevicePolicy.getSnapshot().localOnly) await effectivePolicyReady;
   await environmentManager.init();
   registerSidecars();
-  startAuthBridgeServer();
 
   cliBridge = new CliBridge(ipcHandlers);
   cliBridge.start().catch((err) => {
     debugLogger.error("CLI bridge failed to start", { error: err.message });
     cliBridge = null;
   });
-
-  await migrateCookieToBearerToken();
-  void updateManager.refreshPolicy();
-  ipcHandlers.loadLocalModelPolicy();
 
   applyOpenWhisprOriginHeader(session.defaultSession);
 
@@ -1217,129 +575,7 @@ async function startApp() {
   if (!startMinimized) {
     await windowManager.createControlPanelWindow();
   }
-  affiliateWindowReady = true;
-  await flushPendingAffiliateDeepLink();
-
-  // Windows/Linux cold start delivers protocol URLs via argv (macOS uses
-  // open-url); without this scan a deep link that launches the app is lost.
-  const initialProtocolUrl = process.argv.find((arg) => arg.startsWith(`${OAUTH_PROTOCOL}://`));
-  if (initialProtocolUrl && handleAffiliateDeepLink(initialProtocolUrl)) {
-    await flushPendingNoteDeepLink();
-  } else if (initialProtocolUrl && handleEnterpriseAudioLink(initialProtocolUrl)) {
-    // The renderer consumes the saved setup request after settings mount.
-  } else if (initialProtocolUrl && isNoteDeepLink(initialProtocolUrl)) {
-    await handleNoteDeepLink(initialProtocolUrl);
-  } else {
-    if (initialProtocolUrl && process.platform !== "darwin") {
-      if (initialProtocolUrl.includes("upgrade-success")) {
-        handleUpgradeDeepLink();
-      } else if (isInvitationDeepLink(initialProtocolUrl)) {
-        handleInvitationDeepLink(initialProtocolUrl);
-      } else {
-        void handleOAuthDeepLink(initialProtocolUrl);
-      }
-    }
-    await flushPendingNoteDeepLink();
-  }
-
   await hotkeyManager.hyprlandRegistrationReady;
-
-  // Set up voice agent hotkey (dictation routed straight to the dictation
-  // agent, bypassing cleanup). Tap-only slots gate autorepeat like the
-  // dictation toggle does.
-  const isVoiceAgentPress = createHotkeyRepeatGate();
-  const voiceAgentHotkeyCallback = () => {
-    if (!isVoiceAgentPress()) return;
-    windowManager.sendToggleVoiceAgent();
-  };
-  windowManager._voiceAgentHotkeyCallback = voiceAgentHotkeyCallback;
-
-  const savedVoiceAgentKey = environmentManager.getVoiceAgentKey?.() || "";
-  if (savedVoiceAgentKey) {
-    const result = await hotkeyManager.registerSlot(
-      "voiceAgent",
-      savedVoiceAgentKey,
-      voiceAgentHotkeyCallback
-    );
-    if (!result.success) {
-      debugLogger.warn(
-        "Failed to restore voice agent hotkey",
-        { hotkey: savedVoiceAgentKey },
-        "hotkey"
-      );
-    }
-    hotkeyManager.notifyRestoreFailures(savedVoiceAgentKey, result);
-  }
-
-  // Set up translation hotkey (dictation cleaned up and translated into the
-  // configured target language before pasting)
-  const isTranslationPress = createHotkeyRepeatGate();
-  const translationHotkeyCallback = () => {
-    if (!isTranslationPress()) return;
-    windowManager.sendToggleTranslation();
-  };
-  windowManager._translationHotkeyCallback = translationHotkeyCallback;
-
-  const savedTranslationKey = environmentManager.getTranslationKey?.() || "";
-  if (savedTranslationKey) {
-    const result = await hotkeyManager.registerSlot(
-      "translation",
-      savedTranslationKey,
-      translationHotkeyCallback
-    );
-    if (!result.success) {
-      debugLogger.warn(
-        "Failed to restore translation hotkey",
-        { hotkey: savedTranslationKey },
-        "hotkey"
-      );
-    }
-    hotkeyManager.notifyRestoreFailures(savedTranslationKey, result);
-  }
-
-  // Set up meeting mode hotkey
-  const isMeetingPress = createHotkeyRepeatGate();
-  const meetingHotkeyCallback = () => {
-    if (!isMeetingPress()) return;
-    debugLogger.info("Meeting hotkey triggered", {}, "meeting");
-    // Usually pressed mid-call: an open panel updates behind the meeting app.
-    windowManager.startManualMeeting({ activate: false, startSource: "hotkey" });
-  };
-
-  const savedMeetingKey = environmentManager.getMeetingKey?.() || "";
-  if (savedMeetingKey) {
-    const result = await hotkeyManager.registerSlot(
-      "meeting",
-      savedMeetingKey,
-      meetingHotkeyCallback
-    );
-    debugLogger.info(
-      "Meeting hotkey startup registration",
-      { savedMeetingKey, ...result },
-      "meeting"
-    );
-    hotkeyManager.notifyRestoreFailures(savedMeetingKey, result);
-  }
-
-  ipcMain.handle("register-meeting-hotkey", async (_event, hotkey) => {
-    if (hotkey) {
-      const result = await hotkeyManager.registerSlot("meeting", hotkey, meetingHotkeyCallback, {
-        atomic: true,
-      });
-      windowManager.reconcileNativeKeyListeners();
-      if (result.success) {
-        environmentManager.saveMeetingKey(hotkey);
-        return { success: true };
-      }
-      return { success: false, message: result.error };
-    } else {
-      const removed = await hotkeyManager.unregisterSlot("meeting");
-      if (removed === false) return { success: false };
-      environmentManager.saveMeetingKey("");
-      windowManager.reconcileNativeKeyListeners();
-      return { success: true };
-    }
-  });
 
   // Phase 2: Initialize remaining managers after windows are visible
   initializeDeferredManagers();
@@ -1861,7 +1097,7 @@ ipcMain.on("limit-reached", (_event, data) => {
 
 // App event handlers
 if (gotSingleInstanceLock) {
-  app.on("second-instance", async (_event, commandLine) => {
+  app.on("second-instance", async () => {
     await app.whenReady();
     if (!windowManager) {
       return;
@@ -1880,22 +1116,6 @@ if (gotSingleInstanceLock) {
       windowManager.enforceMainWindowOnTop();
     } else {
       windowManager.createMainWindow();
-    }
-
-    // Check for OAuth protocol URL in command line arguments (Windows/Linux)
-    const url = commandLine.find((arg) => arg.startsWith(`${OAUTH_PROTOCOL}://`));
-    if (url) {
-      if (handleAffiliateDeepLink(url)) return;
-      if (handleEnterpriseAudioLink(url)) return;
-      if (url.includes("upgrade-success")) {
-        handleUpgradeDeepLink();
-      } else if (isNoteDeepLink(url)) {
-        await handleNoteDeepLink(url);
-      } else if (isInvitationDeepLink(url)) {
-        handleInvitationDeepLink(url);
-      } else {
-        void handleOAuthDeepLink(url);
-      }
     }
   });
 
@@ -1989,16 +1209,7 @@ if (gotSingleInstanceLock) {
     if (isShuttingDown) return;
     isShuttingDown = true;
     managedDevicePolicy?.stop();
-    if (updateManager && updateManager.isQuittingForUpdate) {
-      // Quit must proceed for the installer to run, so no preventDefault;
-      // sidecar shutdown is best-effort (the reaper cleans up orphans on relaunch).
-      // The windows haven't closed yet, so a live meeting still ends as app-quit;
-      // a stop the exit cuts short is written from its marker at the next launch.
-      meetingAuditLog?.closeOpenSession();
-      performSyncTeardown();
-      sidecarRegistry.shutdownAll().catch(() => {});
-      return;
-    }
+
     event.preventDefault();
     performSyncTeardown();
     Promise.allSettled([
@@ -2029,14 +1240,8 @@ if (gotSingleInstanceLock) {
 
 function performSyncTeardown() {
   ipcHandlers?._noteFilesSync?.flushSync();
-  registryLoader?.stop();
   disposeRegistryIpc?.();
   disposeRegistryIpc = null;
-  clearPendingNoteDeepLink();
-  if (authBridgeServer) {
-    authBridgeServer.close();
-    authBridgeServer = null;
-  }
   if (cliBridge) {
     cliBridge.stop().catch(() => {});
     cliBridge = null;
@@ -2056,5 +1261,4 @@ function performSyncTeardown() {
   if (meetingAecManager) meetingAecManager.stop().catch(() => {});
   if (ipcHandlers) ipcHandlers._cleanupTextEditMonitor();
   if (textEditMonitor) textEditMonitor.stopMonitoring();
-  if (updateManager) updateManager.cleanup();
 }

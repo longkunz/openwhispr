@@ -1,6 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
+const { EventEmitter } = require("node:events");
+let browserWindowFactory;
 
 const dockVisibilityCalls = [];
 let workArea = { x: 0, y: 0, width: 1440, height: 900 };
@@ -10,6 +12,11 @@ Module._load = function loadWindowManagerWithStubs(request, parent, isMain) {
   if (request === "electron") {
     return {
       app: { on: () => undefined },
+      BrowserWindow: class {
+        constructor() {
+          return browserWindowFactory();
+        }
+      },
       screen: {
         getDisplayMatching: () => ({ workArea: { ...workArea } }),
       },
@@ -18,14 +25,14 @@ Module._load = function loadWindowManagerWithStubs(request, parent, isMain) {
   if (request === "./debugLogger") return {};
   if (request === "./hotkeyManager") return class {};
   if (request === "./dragManager") return class {};
-  if (request === "./menuManager") return {};
+  if (request === "./menuManager") return { setupControlPanelMenu() {} };
   if (request === "./devServerManager") return {};
   if (request === "./dockManager") {
     return {
       setControlPanelVisible: (visible) => dockVisibilityCalls.push(visible),
     };
   }
-  if (request === "./i18nMain") return { i18nMain: {} };
+  if (request === "./i18nMain") return { i18nMain: { t: (key) => key } };
   if (request === "./windowConfig") {
     return {
       NOTIFICATION_WINDOW_CONFIG: {},
@@ -51,14 +58,24 @@ function createControlPanelWindow({
   const minimumSizes = [];
   let currentBounds = { ...bounds };
   let isVisible = visible;
+  let destroyed = false;
 
   return {
     calls,
     resizes,
     minimumSizes,
     isVisible: () => isVisible,
-    window: {
-      isDestroyed: () => false,
+    window: Object.assign(new EventEmitter(), {
+      isDestroyed: () => destroyed,
+      webContents: Object.assign(new EventEmitter(), {
+        send: (...args) => calls.push(args),
+      }),
+      setTitle() {},
+      destroy() {
+        destroyed = true;
+        calls.push("destroy");
+        this.emit("closed");
+      },
       isVisible: () => isVisible,
       isFullScreen: () => false,
       isMaximized: () => false,
@@ -92,7 +109,7 @@ function createControlPanelWindow({
         isVisible = false;
         calls.push("hide");
       },
-    },
+    }),
   };
 }
 
@@ -106,6 +123,72 @@ function createManager(windowOptions) {
 test.beforeEach(() => {
   dockVisibilityCalls.length = 0;
   workArea = { x: 0, y: 0, width: 1440, height: 900 };
+});
+
+test("closing an idle control panel releases its renderer only after the save acknowledgement", () => {
+  const { manager, calls, window } = createManager({ visible: true });
+  manager._onboardingActive = false;
+  manager.hideControlPanelToTray();
+  assert.equal(calls[0], "hide");
+  const request = calls.find((entry) => Array.isArray(entry));
+  assert.ok(request, "hidden panel must be asked to flush before releasing its renderer");
+  assert.equal(request[0], "control-panel-release-requested");
+  assert.equal(window.isDestroyed(), false);
+  assert.equal(manager.completeControlPanelRelease(window.webContents, request[1], true), true);
+  assert.equal(window.isDestroyed(), true);
+  assert.equal(manager._onboardingActive, false);
+});
+
+test("busy, silent and foreign renderer replies never release a panel; showing it cancels a late reply", () => {
+  const { manager, calls, window } = createManager({ visible: true });
+  manager._onboardingActive = false;
+  manager.hideControlPanelToTray();
+  const requestId = calls.find(Array.isArray)[1];
+  assert.equal(manager.completeControlPanelRelease({}, requestId, true), false);
+  assert.equal(manager.completeControlPanelRelease(window.webContents, requestId, false), false);
+  assert.equal(window.isDestroyed(), false);
+  manager.showControlPanel();
+  assert.equal(manager.completeControlPanelRelease(window.webContents, requestId, true), false);
+  assert.equal(window.isDestroyed(), false);
+});
+
+test("releasing and recreating the real panel lifecycle preserves dictation and its hotkey gate", async (t) => {
+  const manager = new WindowManager();
+  manager._onboardingActive = false;
+  const panels = [];
+  browserWindowFactory = () => {
+    const fake = createControlPanelWindow({ visible: false });
+    panels.push(fake);
+    return fake.window;
+  };
+  manager.registerExternalLinkHandlers = () => {};
+  manager.loadControlPanel = async () =>
+    manager.controlPanelWindow.webContents.emit("did-finish-load");
+  t.after(() => {
+    manager._cancelControlPanelRelease();
+    manager._clearControlPanelVisibilityTimer();
+  });
+  const dictationCalls = [];
+  const dictationWindow = {
+    isDestroyed: () => false,
+    webContents: { send: (channel) => dictationCalls.push(channel) },
+  };
+  manager.mainWindow = dictationWindow;
+  manager.hotkeyManager = { isInListeningMode: () => false };
+  manager.showDictationPanel = () => dictationCalls.push("show-pill");
+  await manager.createControlPanelWindow();
+  const panel = manager.controlPanelWindow;
+  panel.emit("close", { preventDefault() {} });
+  const requestId = panels[0].calls.find(Array.isArray)[1];
+  assert.equal(manager.completeControlPanelRelease(panel.webContents, requestId, true), true);
+  assert.equal(manager.controlPanelWindow, null);
+  assert.equal(manager.mainWindow, dictationWindow);
+  manager.sendStartDictation();
+  assert.deepEqual(dictationCalls, ["show-pill", "start-dictation"]);
+  await manager.createControlPanelWindow();
+  assert.notEqual(manager.controlPanelWindow, panel);
+  assert.equal(manager._onboardingActive, false);
+  assert.equal(panels.length, 2);
 });
 
 test("initial restore still reveals the renderer-sized control panel", () => {

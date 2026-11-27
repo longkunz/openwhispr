@@ -6,6 +6,7 @@ import {
   isEnterpriseProvider,
   type EnterpriseProvider,
 } from "../models/ModelRegistry";
+import { registerReasoningCache } from "./reasoningCache";
 import { BaseReasoningService, ReasoningConfig } from "./BaseReasoningService";
 import { SecureCache } from "../utils/SecureCache";
 import { withRetry, createApiRetryStrategy, httpError } from "../utils/retry";
@@ -1948,4 +1949,6 @@ class ReasoningService extends BaseReasoningService {
   }
 }
 
-export default new ReasoningService();
+const reasoningService = new ReasoningService();
+registerReasoningCache((provider) => reasoningService.clearApiKeyCache(provider));
+export default reasoningService;

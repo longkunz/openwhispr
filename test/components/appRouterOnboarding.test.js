@@ -8,182 +8,152 @@ const {
   installHostDom,
 } = require("../lib/rendererTestHarness");
 
-async function createRouterHarness(t, initialStorage = {}) {
+// Exercise the real router, app entry points and startup lifecycle. Retired
+// account and guided-onboarding modules must never load on a normal launch.
+async function createRouterHarness(t, initialStorage = {}, search = "?panel=true") {
   let root;
-  const noteFilesRequests = [];
   t.after(async () => {
     if (root) await React.act(async () => root.unmount());
   });
+  const calls = { noteFiles: [], active: [], modes: [], accessibility: [] };
   const { storage } = installBrowserGlobals(t, {
     initialStorage,
     window: {
-      location: { search: "?control-panel=true" },
+      location: { search },
       electronAPI: {
         noteFilesSetEnabled: (...args) => {
-          noteFilesRequests.push(args);
+          calls.noteFiles.push(args);
           return Promise.resolve({ success: true });
         },
+        setOnboardingActive: (...args) => calls.active.push(args),
+        setOnboardingWindowMode: (...args) => calls.modes.push(args),
+        markMacAccessibilityFeaturesReady: (...args) => calls.accessibility.push(args),
       },
     },
   });
   const container = installHostDom(t);
-  const state = {
-    auth: { isLoaded: true, isSignedIn: false, isGracePeriodOnly: false },
-    policy: {
-      deviceReady: true,
-      status: "managed",
-      localOnly: false,
-      requireSignIn: true,
-      workspaceRequired: false,
-      accountId: null,
-    },
+  const policy = {
+    deviceReady: true,
+    status: "unmanaged",
+    localOnly: false,
+    requireSignIn: false,
+    workspaceRequired: false,
+    accountId: null,
   };
-  globalThis.__appRouterOnboardingTest = state;
-  t.after(() => delete globalThis.__appRouterOnboardingTest);
+  globalThis.__startupPolicy = policy;
+  t.after(() => delete globalThis.__startupPolicy);
   const vite = await createRendererServer(t, {
-    noExternal: ["react-i18next"],
     mockModules: {
-      "react-i18next": `export const useTranslation = () => ({ t: (key) => key });`,
-      "/App.jsx": `export default function App() { return null; }`,
-      "/components/MeetingNotificationOverlay.tsx": `export default function MeetingNotificationOverlay() { return null; }`,
-      "/components/onboarding/PermissionGuideOverlay": `export function PermissionGuideOverlay() { return null; }`,
-      "/components/ReauthenticationScreen.tsx": `
-        export default function ReauthenticationScreen({ requiredByDevice, onContinueWithoutAccount }) {
-          return requiredByDevice && !onContinueWithoutAccount ? "required-sign-in" : "optional-sign-in";
-        }
-      `,
-      "/components/onboarding/BackgroundModelDownloadTray.tsx": `export default function BackgroundModelDownloadTray() { return null; }`,
-      "/hooks/useAuth": `export const useAuth = () => globalThis.__appRouterOnboardingTest.auth;`,
-      "/hooks/useControlPanelWindowDrag": `export function useControlPanelWindowDrag() {}`,
-      "/hooks/useTheme": `export function useTheme() {}`,
-      "/lib/accountScopeMirror": `export function mirrorActiveAccountScope() {}`,
+      "react-i18next": "export const useTranslation = () => ({ t: (key) => key });",
+      "/App.jsx": 'export default function App() { return "dictation"; }',
+      "/components/ControlPanel":
+        'export default function ControlPanel() { return "control-panel"; }',
+      "/components/MeetingNotificationOverlay.tsx":
+        'export default function MeetingNotificationOverlay() { return "meeting-notification"; }',
+      "/components/onboarding/PermissionGuideOverlay":
+        'export function PermissionGuideOverlay() { return "permission-guide"; }',
+      "/components/agent/AgentWindow.tsx":
+        'export default function AgentWindow() { return "agent-window"; }',
+      "/hooks/useControlPanelWindowDrag": "export function useControlPanelWindowDrag() {}",
+      "/hooks/useTheme": "export function useTheme() {}",
+      "/lib/accountScopeMirror": "export function mirrorActiveAccountScope() {}",
       "/stores/policyStore": `
-        export const usePolicyStore = (selector) => selector(globalThis.__appRouterOnboardingTest.policy);
+        export const usePolicyStore = (selector) => selector(globalThis.__startupPolicy);
         usePolicyStore.getState = () => ({ bootstrap: async () => {} });
       `,
       "/stores/settingsStore": `
-        export const useSettingsStore = {
-          getState: () => ({
-            noteFilesEnabled: localStorage.getItem("noteFilesEnabled") === "true",
-            noteFilesPath: localStorage.getItem("noteFilesPath") ?? "",
-          }),
-        };
+        export const useSettingsStore = { getState: () => ({
+          noteFilesEnabled: localStorage.getItem("noteFilesEnabled") === "true",
+          noteFilesPath: localStorage.getItem("noteFilesPath") ?? "",
+        }) };
       `,
-      "/lib/auth": `export async function signOut() {}`,
-      "/components/ui/button": `export function Button({ children }) { return children; }`,
-      "/utils/windowContext.ts": `export const isControlPanelWindow = () => true; export const isAgentWindow = () => false;`,
-      "/components/ControlPanel.tsx": `export default function ControlPanel() { return "control-panel"; }`,
-      "/components/agent/AgentWindow.tsx": `export default function AgentWindow() { return null; }`,
-      "/services/SyncService.js": `export const syncService = { startAutoSync() {} };`,
-      // Keep the flow's real persistence hook: OAuth reloads depend on its markers.
-      "/components/OnboardingFlow.tsx": `
-        import { useOnboardingSession } from "/components/onboarding/useOnboardingSession.ts";
-        export default function OnboardingFlow() {
-          const { session } = useOnboardingSession();
-          return "onboarding:" + session.currentStepId;
-        }
-      `,
+      "/lib/auth": 'throw new Error("Retired account client loaded");',
+      "/services/SyncService.js": 'throw new Error("Retired cloud sync loaded");',
+      "/components/OnboardingFlow.tsx": 'throw new Error("Retired guided onboarding loaded");',
+      "/components/ReauthenticationScreen.tsx": 'throw new Error("Retired sign-in screen loaded");',
+      "/components/ui/button": "export function Button({ children }) { return children; }",
     },
   });
   const { default: AppRouter } = await vite.ssrLoadModule("/AppRouter.jsx");
-  const flow = await vite.ssrLoadModule("/components/onboarding/flow.ts");
   await Promise.all([
-    vite.ssrLoadModule("/components/OnboardingFlow.tsx"),
-    vite.ssrLoadModule("/components/ControlPanel.tsx"),
+    vite.ssrLoadModule("/ControlPanelApp.jsx"),
+    vite.ssrLoadModule("/DictationApp.jsx"),
+    vite.ssrLoadModule("/components/onboarding/PermissionGuideOverlay"),
+    vite.ssrLoadModule("/components/MeetingNotificationOverlay.tsx"),
+    vite.ssrLoadModule("/components/agent/AgentWindow.tsx"),
   ]);
   root = createRoot(container);
   const render = async () => {
-    await React.act(async () => {
-      root.render(React.createElement(AppRouter));
-    });
+    await React.act(async () => root.render(React.createElement(AppRouter)));
   };
-  const reloadAfterSignIn = async () => {
-    // main.js reloads the control panel when it receives an OAuth bearer token.
-    await React.act(async () => root.unmount());
-    state.auth.isSignedIn = true;
-    state.policy.accountId = "signed-in-account";
-    state.policy.status = "loading";
-    root = createRoot(container);
-    await render();
-    state.policy.status = "managed";
-    await render();
-  };
-  return {
-    container,
-    storage,
-    flow,
-    render,
-    reloadAfterSignIn,
-    policy: state.policy,
-    noteFilesRequests,
-  };
+  return { container, storage, calls, policy, render };
 }
 
-test("the control panel requests note-file recovery once device policy is ready", async (t) => {
-  const { noteFilesRequests, policy, render } = await createRouterHarness(t, {
+test("the panel waits for device policy and recovers note files once on mount", async (t) => {
+  const { calls, policy, render, storage, container } = await createRouterHarness(t, {
     noteFilesEnabled: "true",
     noteFilesPath: "/tmp/note-exports",
   });
   policy.deviceReady = false;
   await render();
-  assert.deepEqual(noteFilesRequests, []);
-
+  assert.deepEqual(calls.noteFiles, []);
+  assert.equal(storage.getItem("onboardingCompleted"), null);
   policy.deviceReady = true;
   await render();
   await render();
-  assert.deepEqual(noteFilesRequests, [[true, "/tmp/note-exports", { startup: true }]]);
+  assert.equal(container.textContent, "control-panel");
+  assert.deepEqual(calls.noteFiles, [[true, "/tmp/note-exports", { startup: true }]]);
+  assert.deepEqual(calls.active, [[false]]);
+  assert.deepEqual(calls.modes, [["restore"]]);
 });
 
-test("required first sign-in preserves onboarding across the OAuth reload", async (t) => {
-  const { container, storage, flow, render, reloadAfterSignIn } = await createRouterHarness(t);
-  await render();
-  assert.equal(container.textContent, "required-sign-in");
-  assert.equal(storage.getItem("onboardingCompleted"), null);
-
-  await reloadAfterSignIn();
-  assert.equal(storage.getItem("onboardingCompleted"), null);
-  assert.equal(container.textContent, "onboarding:auth");
-  assert.equal(
-    flow.parseOnboardingSession(storage.getItem(flow.ONBOARDING_SESSION_KEY)).currentStepId,
-    "auth"
-  );
-});
-
-for (const [step, authPath] of [
-  ["permissions", "guest"],
-  ["required-models", "account"],
-]) {
-  test(`required sign-in preserves unfinished ${step} setup`, async (t) => {
-    const { container, storage, flow, render, reloadAfterSignIn } = await createRouterHarness(t);
-    storage.setItem(
-      flow.ONBOARDING_SESSION_KEY,
-      JSON.stringify({ ...flow.createOnboardingSession(), currentStepId: step, authPath })
-    );
+for (const signedIn of ["false", "true"]) {
+  test(`a local launch bypasses sign-in without resuming cloud (stored signed-in=${signedIn})`, async (t) => {
+    const { container, storage, calls, policy, render } = await createRouterHarness(t, {
+      isSignedIn: signedIn,
+      onboardingCurrentStep: "0",
+      onboardingSessionV2: JSON.stringify({ currentStepId: "auth" }),
+      "openwhispr:accountProfile": "existing-profile",
+    });
+    policy.requireSignIn = true;
     await render();
-    assert.equal(container.textContent, "required-sign-in");
-
-    await reloadAfterSignIn();
-    assert.equal(storage.getItem("onboardingCompleted"), null);
-    assert.equal(container.textContent, `onboarding:${step}`);
-    assert.equal(
-      flow.parseOnboardingSession(storage.getItem(flow.ONBOARDING_SESSION_KEY)).authPath,
-      authPath
-    );
+    assert.equal(container.textContent, "control-panel");
+    for (const key of ["onboardingCompleted", "authenticationSkipped", "skipAuth"])
+      assert.equal(storage.getItem(key), "true");
+    assert.equal(storage.getItem("openwhispr:accountProfile"), "existing-profile");
+    assert.deepEqual(calls.accessibility, [[undefined]]);
   });
 }
 
-test("required reauthentication does not restart completed guest onboarding", async (t) => {
-  const { container, storage, flow, render, reloadAfterSignIn } = await createRouterHarness(t, {
-    onboardingCompleted: "true",
-    authenticationSkipped: "true",
-    skipAuth: "true",
-  });
+test("the float releases the startup gate without restoring a control-panel window", async (t) => {
+  const { container, calls, render } = await createRouterHarness(t, {}, "");
   await render();
-  assert.equal(container.textContent, "required-sign-in");
-  assert.equal(storage.getItem(flow.ONBOARDING_SESSION_KEY), null);
-
-  await reloadAfterSignIn();
-  assert.equal(container.textContent, "control-panel");
-  assert.equal(storage.getItem("onboardingCompleted"), "true");
-  assert.equal(storage.getItem(flow.ONBOARDING_SESSION_KEY), null);
+  assert.equal(container.textContent, "dictation");
+  assert.deepEqual(calls.active, [[false]]);
+  assert.deepEqual(calls.modes, []);
 });
+
+test("an invalid device policy blocks normal startup until corrected", async (t) => {
+  const { container, policy, calls, storage, render } = await createRouterHarness(t);
+  policy.code = "DEVICE_POLICY_INVALID";
+  await render();
+  assert.match(container.textContent, /common.devicePolicyInvalid/);
+  assert.deepEqual(calls.noteFiles, []);
+  assert.deepEqual(calls.active, []);
+  assert.equal(storage.getItem("onboardingCompleted"), null);
+  policy.code = undefined;
+  await render();
+  assert.equal(container.textContent, "control-panel");
+  assert.deepEqual(calls.active, [[false]]);
+});
+
+for (const [search, content] of [["?permission-guide=true", "permission-guide"]]) {
+  test(`${content} never runs normal-app startup effects`, async (t) => {
+    const { container, calls, storage, render } = await createRouterHarness(t, {}, search);
+    await render();
+    assert.equal(container.textContent, content);
+    assert.deepEqual(calls.noteFiles, []);
+    assert.deepEqual(calls.active, []);
+    assert.equal(storage.getItem("onboardingCompleted"), null);
+  });
+}

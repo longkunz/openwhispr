@@ -110,7 +110,7 @@ import type { EnterpriseSetupMode } from "../types/enterpriseIdentity";
 import { getManagedScopeResolution } from "./enterpriseIdentityStore";
 import { syncAfterLocalWrite } from "../services/syncAfterLocalWrite";
 
-let _ReasoningService: typeof import("../services/ReasoningService").default | null = null;
+import { invalidateReasoningCache } from "../services/reasoningCache";
 
 // Requires localStorage as well as window: the module-scope migrations below
 // dereference the bare localStorage global, and test harnesses import this
@@ -1693,16 +1693,7 @@ function invalidateApiKeyCaches(
     | "openrouter"
     | "corti"
 ) {
-  if (_ReasoningService) {
-    _ReasoningService.clearApiKeyCache(provider);
-  } else {
-    import("../services/ReasoningService")
-      .then((mod) => {
-        _ReasoningService = mod.default;
-        _ReasoningService.clearApiKeyCache(provider);
-      })
-      .catch(() => {});
-  }
+  invalidateReasoningCache(provider);
   if (isBrowser) window.dispatchEvent(new Event("api-key-changed"));
 }
 

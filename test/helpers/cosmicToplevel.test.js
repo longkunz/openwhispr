@@ -76,16 +76,20 @@ function startCompositor(t, { globals, toplevels }) {
       }
     });
   });
-  const socketPath = path.join(runtimeDir, "wayland-test");
+  const socketPath =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\${path.basename(runtimeDir)}`
+      : path.join(runtimeDir, "wayland-test");
   t.after(() => {
     server.close();
     fs.rmSync(runtimeDir, { recursive: true, force: true });
   });
-  return new Promise((resolve) =>
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
     server.listen(socketPath, () =>
-      resolve({ env: { XDG_RUNTIME_DIR: runtimeDir, WAYLAND_DISPLAY: "wayland-test" }, binds })
-    )
-  );
+      resolve({ env: { XDG_RUNTIME_DIR: runtimeDir, WAYLAND_DISPLAY: socketPath }, binds })
+    );
+  });
 }
 
 test("returns the activated toplevel's app id from a version 1 bind", async (t) => {

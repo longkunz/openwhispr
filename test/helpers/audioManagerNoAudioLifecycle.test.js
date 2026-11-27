@@ -28,7 +28,7 @@ function createManager(AudioManager, failure) {
     pendingAssistantConversation: null,
     pendingSelectionEdit: null,
     lastAudioBlob: {},
-    processWithLocalWhisper: async () => {
+    processVietAsrFallback: async () => {
       throw failure;
     },
     processWithOpenWhisprCloud: async () => {
@@ -42,7 +42,7 @@ function createManager(AudioManager, failure) {
   return { manager, order, saved };
 }
 
-test("local silence becomes one no-audio outcome after processing is idle", async (t) => {
+test("self-hosted silence becomes one no-audio outcome after processing is idle", async (t) => {
   const AudioManager = await loadManagerClass(t);
   const { manager, order, saved } = createManager(AudioManager, new Error("No audio detected"));
 
@@ -53,20 +53,7 @@ test("local silence becomes one no-audio outcome after processing is idle", asyn
   assert.deepEqual(saved, []);
 });
 
-test("dictionary-echo silence keeps the recording but shares the settled outcome", async (t) => {
-  const AudioManager = await loadManagerClass(t);
-  const { DICTIONARY_ECHO_CODE } = await import("../../src/utils/dictionaryEchoFilter.js");
-  const failure = new Error("No audio detected");
-  failure.code = DICTIONARY_ECHO_CODE;
-  const { manager, order, saved } = createManager(AudioManager, failure);
-
-  await manager.processAudio({ size: 256, type: "audio/webm" });
-
-  assert.deepEqual(order, ["idle", "no-audio"]);
-  assert.deepEqual(saved, [{ message: "No audio detected", code: DICTIONARY_ECHO_CODE }]);
-});
-
-test("Cloud finding no speech is the no-audio outcome and keeps the recording", async (t) => {
+test("self-hosted finding no speech is the no-audio outcome and keeps the recording", async (t) => {
   const AudioManager = await loadManagerClass(t, {
     useLocalWhisper: false,
     cloudTranscriptionMode: "openwhispr",

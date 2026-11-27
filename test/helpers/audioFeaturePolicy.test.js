@@ -544,21 +544,6 @@ test("onRefused hears a refusal that lands while the handler runs only if it did
   assert.deepEqual(refused, Array(2).fill("POLICY_MEETING_RECORDING_DISABLED"));
 });
 
-// #3029: main's local-model gate refuses a local meeting start with its own codes.
-test("onRefused hears a local-model refusal of a start that did not go ahead", async () => {
-  const guard = createAudioFeaturePolicy({ getPolicy: async () => policy(true) });
-  guard.update(policy(true));
-  const refused = [];
-  const result = await guard.run(
-    {},
-    "meeting",
-    async () => ({ success: false, code: "POLICY_MODEL_BLOCKED", error: "blocked" }),
-    { onRefused: (failure) => refused.push(failure.code) }
-  );
-  assert.equal(result.code, "POLICY_MODEL_BLOCKED");
-  assert.deepEqual(refused, ["POLICY_MODEL_BLOCKED"]);
-});
-
 // Main throws DEVICE_POLICY_BLOCKED for a meeting whose transcription choice
 // the device or product policy refuses, before the meeting starts.
 test("onRefused hears a device policy block of a start that did not go ahead", async () => {

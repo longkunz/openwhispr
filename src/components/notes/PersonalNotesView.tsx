@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  holdControlPanel,
+  registerControlPanelReleaseFlusher,
+  registerControlPanelReleaseGuard,
+} from "../../utils/controlPanelRelease";
 import { useTranslation } from "react-i18next";
-import { useShallow } from "zustand/react/shallow";
-import { Plus, Sparkles } from "../icons";
+import { Plus } from "../icons";
 import { useToast } from "../ui/useToast";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import NoteEditor from "./NoteEditor";
@@ -10,47 +14,12 @@ import SpacesTree from "./SpacesTree";
 import { ContainerOverview } from "./overview/ContainerOverview";
 import NotesStructureIntroDialog from "./NotesStructureIntroDialog";
 import AddNotesToFolderDialog from "./AddNotesToFolderDialog";
-import { useActionProcessing } from "../../hooks/useActionProcessing";
 import { useResizableWidth } from "../../hooks/useResizableWidth";
 import type { NoteMoveTarget } from "../../hooks/useNoteDragAndDrop";
-import type {
-  ActionItem,
-  ActionKind,
-  MeetingStartSource,
-  NoteItem,
-  NoteMutationResult,
-} from "../../types/electron";
-import { buildNoteRunInput } from "../../helpers/templatePrompts";
-import {
-  useSettingsStore,
-  selectIsCloudNoteFormattingMode,
-  selectPolicyEffectiveSettings,
-  selectResolvedNoteFormatting,
-} from "../../stores/settingsStore";
+import type { NoteItem, NoteMutationResult } from "../../types/electron";
 import { cn } from "../lib/utils";
 import logger from "../../utils/logger";
-import {
-  parseSeedSegments,
-  parseTranscriptSegments,
-  speakerlessTranscriptText,
-} from "../../utils/parseTranscriptSegments";
-import { isExplicitSpeakerCount, resolveExpectedSpeakerCount } from "../../utils/participants";
-import {
-  buildLlmTranscript,
-  buildMeetingContext,
-  collectKnownPeople,
-  type MeetingIdentity,
-} from "../../utils/llmTranscript";
-import {
-  isNoteRecorder,
-  noteRecorderUserId,
-  recorderLlmLabel,
-  resolveNoteRecorder,
-  recordingRecorderName,
-} from "../../utils/noteRecorder";
-import { fetchSpaceRoster } from "../../hooks/useSpaceRoster";
-import type { MentionPerson } from "../../utils/mentionMarkdown";
-import type { CalendarAttendee, CalendarEvent } from "../../types/calendar";
+import type { CalendarEvent } from "../../types/calendar";
 import {
   useNotes,
   useSpaces,
@@ -77,36 +46,23 @@ import { useDeviceNotesStore } from "../../stores/deviceNotesStore";
 import { useWorkspaceStore } from "../../stores/workspaceStore";
 import { isSpaceInWorkspaceScope } from "../../lib/workspaceSelection";
 import {
-  useMeetingRecordingStore,
   useIsMeetingMode,
   useIsNarrowWindow,
-  startRecording as storeStartRecording,
-  stopRecording as storeStopRecording,
-  lockSpeaker,
-  setSessionDiarizationEnabled,
-  setSessionExpectedCount,
   markRecordingNoteDeletedByUser,
   rescueRecordingNote,
 } from "../../stores/meetingRecordingStore";
 import { useNotesOnboarding } from "../../hooks/useNotesOnboarding";
 import { useVoiceNoteRecorder } from "../../hooks/useVoiceNoteRecorder";
-import { startRecordingForNote, useCreateNote } from "../../hooks/useCreateNote";
+import { useCreateNote } from "../../hooks/useCreateNote";
 import { useTeamSpacesCapability } from "../../hooks/useTeamSpacesCapability";
-import { useAuth } from "../../hooks/useAuth";
-import { usePolicySnapshot, useTranscriptionContextAllowed } from "../../hooks/usePolicy";
-import NotesOnboarding from "./NotesOnboarding";
 import {
   folderMutationErrorDescription,
   folderPathLabel,
   notesEmptyTitleKey,
   orderFoldersAsTree,
 } from "./shared";
-import { isRegenerableNoteTitle } from "../../helpers/regenerableNoteTitle";
-import { isMeetingAutoEndEligible } from "../../helpers/meetingRecordingSession";
-import { handleMeetingRecordingRequest } from "../../helpers/meetingRecordingRequest";
 import { markIntroSeen, NOTES_STRUCTURE_INTRO, shouldShowIntro } from "../../lib/versionedIntro";
 import { useModalGate } from "../../stores/modalGateStore";
-import type { InvitationNotesEntry } from "../../hooks/useInvitationNotesEntry";
 import {
   applyNoteDraftMutation,
   collectPendingNoteWrites,
@@ -122,16 +78,6 @@ import {
 
 function makeContentHash(content: string): string {
   return String(content.length) + "-" + content.slice(0, 50);
-}
-
-function parseNoteParticipants(raw: string | null | undefined): CalendarAttendee[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 function draftFromNote(note: NoteItem): NoteEditorDraft {
@@ -172,21 +118,6 @@ function carriesTypedText(updates: PendingNoteWrite["updates"]): boolean {
 
 interface PersonalNotesViewProps {
   onOpenSettings?: (section: string) => void;
-  meetingRecordingRequest?: {
-    noteId: number;
-    folderId: number | null;
-    event: any;
-    startSource?: MeetingStartSource;
-    trigger?: string;
-    noteSessionId?: string;
-  } | null;
-  onMeetingRecordingRequestHandled?: () => void;
-  invitationEntry?: InvitationNotesEntry | null;
-  onInvitationEntryHandled?: () => void;
-  canAutoStartMeeting: () => boolean;
-  /** ControlPanel holds the workspace intro until this view has mounted after a join. */
-  notesHandOff?: boolean;
-  onNotesHandOffDone?: () => void;
 }
 
 // The list's CSS cap: 30% of the view it shares with the note.
@@ -195,16 +126,7 @@ function notesListMaxWidth(panel: HTMLElement): number {
   return Math.floor((view?.clientWidth ?? Infinity) * 0.3);
 }
 
-export default function PersonalNotesView({
-  onOpenSettings,
-  meetingRecordingRequest,
-  onMeetingRecordingRequestHandled,
-  invitationEntry,
-  onInvitationEntryHandled,
-  canAutoStartMeeting,
-  notesHandOff = false,
-  onNotesHandOffDone,
-}: PersonalNotesViewProps) {
+export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewProps) {
   const isMeetingMode = useIsMeetingMode();
   const isNarrowWindow = useIsNarrowWindow();
   const { t } = useTranslation();
@@ -224,10 +146,11 @@ export default function PersonalNotesView({
   const [isSaving, setIsSaving] = useState(false);
   const [draft, setDraftState] = useState<NoteEditorDraft | null>(null);
   const draftRef = useRef<NoteEditorDraft | null>(null);
-  const [managerKind, setManagerKind] = useState<ActionKind | null>(null);
   const [showAddNotesDialog, setShowAddNotesDialog] = useState(false);
   const pendingDocumentRef = useRef<PendingDocumentSave | null>(null);
   const pendingEnhancedRef = useRef<PendingEnhancedSave | null>(null);
+  const failedAutosaveRef = useRef(false);
+  useEffect(() => registerControlPanelReleaseGuard(() => !failedAutosaveRef.current), []);
   // The open note's last stored row and the account it was opened under: where a copy goes, and
   // for whom, should the note vanish before a save lands (see rescueLostNoteWrite).
   const openNoteRowRef = useRef<NoteItem | null>(null);
@@ -357,10 +280,19 @@ export default function PersonalNotesView({
   // Sends a save; one refused because its note is gone has its edits rescued.
   const writePendingSave = useCallback(
     async (write: PendingNoteWrite): Promise<NoteMutationResult | null> => {
-      const context = lostNoteContext(write.noteId);
-      const result = await window.electronAPI.updateNote(write.noteId, write.updates);
-      if (result && !result.success) await rescueLostNoteWrite(write, context, result.error);
-      return result ?? null;
+      const release = holdControlPanel();
+      try {
+        const context = lostNoteContext(write.noteId);
+        const result = await window.electronAPI.updateNote(write.noteId, write.updates);
+        if (!result?.success) failedAutosaveRef.current = true;
+        if (result && !result.success) await rescueLostNoteWrite(write, context, result.error);
+        return result ?? null;
+      } catch (error) {
+        failedAutosaveRef.current = true;
+        throw error;
+      } finally {
+        release();
+      }
     },
     [lostNoteContext, rescueLostNoteWrite]
   );
@@ -385,22 +317,27 @@ export default function PersonalNotesView({
   // base. They stay pending until written, so a failed save is retried by its
   // own timer and the draft is never replaced by the store copy meanwhile.
   const savePendingNow = useCallback(async (noteId: number) => {
-    const document =
-      pendingDocumentRef.current?.noteId === noteId ? pendingDocumentRef.current : null;
-    const enhanced =
-      pendingEnhancedRef.current?.noteId === noteId ? pendingEnhancedRef.current : null;
-    for (const write of collectPendingNoteWrites(document, enhanced)) {
-      const result = await window.electronAPI.updateNote(write.noteId, write.updates);
-      if (!result?.success) throw new Error(result?.error ?? "Note save failed");
-    }
-    // Retire only the saves just written; an edit made meanwhile stays pending.
-    if (document && pendingDocumentRef.current === document) {
-      clearTimeout(document.timer);
-      pendingDocumentRef.current = null;
-    }
-    if (enhanced && pendingEnhancedRef.current === enhanced) {
-      clearTimeout(enhanced.timer);
-      pendingEnhancedRef.current = null;
+    const release = holdControlPanel();
+    try {
+      const document =
+        pendingDocumentRef.current?.noteId === noteId ? pendingDocumentRef.current : null;
+      const enhanced =
+        pendingEnhancedRef.current?.noteId === noteId ? pendingEnhancedRef.current : null;
+      for (const write of collectPendingNoteWrites(document, enhanced)) {
+        const result = await window.electronAPI.updateNote(write.noteId, write.updates);
+        if (!result?.success) throw new Error(result?.error ?? "Note save failed");
+      }
+      // Retire only the saves just written; an edit made meanwhile stays pending.
+      if (document && pendingDocumentRef.current === document) {
+        clearTimeout(document.timer);
+        pendingDocumentRef.current = null;
+      }
+      if (enhanced && pendingEnhancedRef.current === enhanced) {
+        clearTimeout(enhanced.timer);
+        pendingEnhancedRef.current = null;
+      }
+    } finally {
+      release();
     }
   }, []);
 
@@ -418,6 +355,25 @@ export default function PersonalNotesView({
 
     return { document, enhanced };
   }, []);
+
+  useEffect(
+    () =>
+      registerControlPanelReleaseFlusher(async () => {
+        const document = pendingDocumentRef.current;
+        const enhanced = pendingEnhancedRef.current;
+        // Stop the debounce before awaiting IPC so its timer cannot race the flush.
+        if (document) clearTimeout(document.timer);
+        if (enhanced) clearTimeout(enhanced.timer);
+        const noteIds = new Set([document?.noteId, enhanced?.noteId]);
+        for (const noteId of noteIds) {
+          if (noteId != null) await savePendingNow(noteId);
+        }
+        if (pendingDocumentRef.current || pendingEnhancedRef.current) {
+          throw new Error("Note changed during close preparation");
+        }
+      }),
+    [savePendingNow]
+  );
 
   const persistPendingWrites = useCallback(
     (writes: PendingNoteWrite[], reason: PendingSaveReason) => {
@@ -451,54 +407,14 @@ export default function PersonalNotesView({
     },
     [commitDraft, persistPendingWrites, takePendingSnapshots]
   );
-  const policyState = usePolicySnapshot();
-  const noteFormatting = useSettingsStore(
-    useShallow((settings) => {
-      const effectiveSettings = selectPolicyEffectiveSettings(settings, policyState);
-      return {
-        isCloudMode: selectIsCloudNoteFormattingMode(effectiveSettings),
-        modelId: selectResolvedNoteFormatting(effectiveSettings).model,
-      };
-    })
-  );
-  const isCloudMode = noteFormatting.isCloudMode;
-  const effectiveModelId = noteFormatting.modelId;
   const { isComplete: isOnboardingComplete, complete: completeOnboarding } = useNotesOnboarding();
-  const { isSignedIn, user } = useAuth();
+  const isSignedIn = false;
   const teamSpacesAvailable = useTeamSpacesCapability(isSignedIn);
   const isTreeLoading = useIsTreeLoading();
   const [structureIntroPending, setStructureIntroPending] = useState(() =>
     shouldShowIntro(localStorage, NOTES_STRUCTURE_INTRO)
   );
   const [showStructureIntro, setShowStructureIntro] = useState(false);
-
-  const isTranscribing = useMeetingRecordingStore((s) => s.isRecording);
-  const diarizationSessionId = useMeetingRecordingStore((s) => s.diarizationSessionId);
-  const recordingNoteId = useMeetingRecordingStore((s) => s.recordingNoteId);
-  const sessionDiarizationEnabled = useMeetingRecordingStore((s) => s.sessionDiarizationEnabled);
-  const sessionExpectedCount = useMeetingRecordingStore((s) => s.sessionExpectedCount);
-  const userTouchedStepper = useMeetingRecordingStore((s) => s.userTouchedStepper);
-  const meetingRecordingAllowed = useTranscriptionContextAllowed("meeting");
-  const recordingCopy = useMeetingRecordingStore((s) => s.recordingCopy);
-
-  // The recording's note vanished and the recording went on in a new note: said once, here.
-  useEffect(() => {
-    if (!recordingCopy) return;
-    useMeetingRecordingStore.setState({ recordingCopy: null });
-    const copy = {
-      id: recordingCopy.noteId,
-      space_id: recordingCopy.spaceId,
-      folder_id: recordingCopy.folderId,
-    };
-    toast({
-      title: t("notes.meeting.recordingCopy.title"),
-      description: t("notes.meeting.recordingCopy.description", {
-        title: recordingCopy.lostTitle || t("notes.list.untitled"),
-      }),
-      duration: 10000,
-      actions: [{ label: t("notes.meeting.recordingCopy.open"), onClick: () => openNote(copy) }],
-    });
-  }, [recordingCopy, t, toast]);
 
   const spaces = useSpaces();
   const viewNoteId = useDeviceNotesStore((s) => s.viewNoteId);
@@ -527,60 +443,11 @@ export default function PersonalNotesView({
     isSignedIn &&
     teamSpacesAvailable &&
     !isSidePanelLayout;
-  // Arriving via an accepted invitation reopens the structure intro even when
-  // this device has already seen it, and even before notes onboarding is done
-  // (the dialog also renders in the onboarding branch below). It opens once per
-  // invitation, when no side panel is in the way, and holds the gate until then.
-  const [invitationIntroShownFor, setInvitationIntroShownFor] =
-    useState<PersonalNotesViewProps["invitationEntry"]>(null);
-  const invitationIntroDue =
-    invitationEntry != null && !isSidePanelLayout && invitationIntroShownFor !== invitationEntry;
-  useModalGate("notesStructureIntroPending", structureIntroDue || invitationIntroDue);
+  useModalGate("notesStructureIntroPending", structureIntroDue);
 
   useEffect(() => {
     if (structureIntroDue && !isTreeLoading) setShowStructureIntro(true);
   }, [structureIntroDue, isTreeLoading]);
-
-  useEffect(() => {
-    if (!invitationIntroDue) return;
-    setShowStructureIntro(true);
-    setInvitationIntroShownFor(invitationEntry);
-  }, [invitationIntroDue, invitationEntry]);
-
-  // Releases ControlPanel's hand-off gate in the same render that opens the structure intro just
-  // above; a due intro already holds its own gate, so the workspace intro never slips in between.
-  useEffect(() => {
-    if (notesHandOff) onNotesHandOffDone?.();
-  }, [notesHandOff, onNotesHandOffDone]);
-
-  // The acceptance modal starts a sync before navigating here. Once the first
-  // space the invitation granted (directly or via a team) appears in the local
-  // mirror, take the user to it instead of leaving the newly shared content
-  // hidden behind Personal.
-  useEffect(() => {
-    if (!invitationEntry) return;
-    const invitedTeamIds = new Set(invitationEntry.teamIds);
-    const invitedSpaceIds = new Set(invitationEntry.spaceIds);
-    // Workspace owners/admins receive implicit access, so their invitation
-    // may enumerate no grants at all. In that case, open the first accessible
-    // team space belonging to the accepted workspace.
-    const anyGrant = invitedTeamIds.size === 0 && invitedSpaceIds.size === 0;
-    const invitedSpace = spaces.find(
-      (space) =>
-        space.kind === "team" &&
-        space.workspace_id === invitationEntry.workspaceId &&
-        space.cloud_space_id != null &&
-        (anyGrant ||
-          invitedSpaceIds.has(space.cloud_space_id) ||
-          space.teams.some((team) => invitedTeamIds.has(team.id)))
-    );
-    if (!invitedSpace) return;
-
-    setActiveNoteId(null);
-    revealContainer(invitedSpace.id, null);
-    setActiveContext(invitedSpace.id, null);
-    onInvitationEntryHandled?.();
-  }, [invitationEntry, onInvitationEntryHandled, spaces]);
 
   const handleStructureIntroOpenChange = useCallback((open: boolean) => {
     setShowStructureIntro(open);
@@ -628,11 +495,6 @@ export default function PersonalNotesView({
       cancelled = true;
     };
   }, [linkedEventId]);
-  const linkedEvent = !linkedEventId
-    ? null
-    : linkedEventLookup?.id === linkedEventId
-      ? linkedEventLookup.event
-      : undefined;
 
   useEffect(() => {
     const currentDraft = draftRef.current;
@@ -792,7 +654,7 @@ export default function PersonalNotesView({
   );
 
   const handleVoiceNoteTranscribed = useCallback(
-    (targetNoteId: number, text: string) => {
+    async (targetNoteId: number, text: string) => {
       const currentDraft = draftRef.current;
       if (currentDraft && currentDraft.noteId === targetNoteId) {
         const existing = currentDraft.content || "";
@@ -803,9 +665,9 @@ export default function PersonalNotesView({
       const fallbackNote = getNoteFromStore(targetNoteId);
       const existing = fallbackNote?.content || "";
       const nextContent = existing.trim() ? `${existing.trimEnd()}\n\n${text}` : text;
-      void window.electronAPI?.updateNote?.(targetNoteId, { content: nextContent });
+      await writePendingSave({ noteId: targetNoteId, updates: { content: nextContent } });
     },
-    [handleContentChange]
+    [handleContentChange, writePendingSave]
   );
 
   const voiceNoteRecorder = useVoiceNoteRecorder(handleVoiceNoteTranscribed);
@@ -837,7 +699,7 @@ export default function PersonalNotesView({
     return () => flushPendingSaves("unmount");
   }, [flushPendingSaves]);
 
-  const { createNote, createNoteIn } = useCreateNote(canAutoStartMeeting);
+  const { createNote, createNoteIn } = useCreateNote();
 
   const handleNotesAdded = useCallback(async () => {
     if (activeFolderId) {
@@ -925,14 +787,6 @@ export default function PersonalNotesView({
     [handleMoveToFolder, toast, t, folders]
   );
 
-  const {
-    state: actionProcessingState,
-    actionName,
-    progress: actionProgress,
-    runAction,
-    cancel: cancelAction,
-  } = useActionProcessing(activeNoteId ?? null);
-
   const activeNoteRawTranscript = activeNote?.transcript || "";
   const activeDraft = draft?.noteId === activeNote?.id ? draft : null;
   const editorNote = activeNote
@@ -974,173 +828,10 @@ export default function PersonalNotesView({
     [activeNoteId]
   );
 
-  const handledMeetingRequest = useRef<typeof meetingRecordingRequest>(null);
-  useEffect(() => {
-    if (
-      !meetingRecordingRequest ||
-      activeNoteId !== meetingRecordingRequest.noteId ||
-      activeNote?.id !== meetingRecordingRequest.noteId ||
-      handledMeetingRequest.current === meetingRecordingRequest
-    )
-      return;
-    handledMeetingRequest.current = meetingRecordingRequest;
-    const note = activeNote;
-    const seedSegments = parseSeedSegments(note.transcript);
-    void handleMeetingRecordingRequest({
-      args: {
-        noteId: meetingRecordingRequest.noteId,
-        noteTitle: note.title,
-        folderId: note.folder_id,
-        seedSegments,
-        recorderName: recordingRecorderName(note, user, t),
-        diarizationEnabled:
-          note.diarization_enabled == null ? null : note.diarization_enabled === 1,
-        expectedCount: resolveExpectedSpeakerCount(note),
-        expectedCountIsExplicit: isExplicitSpeakerCount(note.expected_speaker_count),
-        autoEndEligible: isMeetingAutoEndEligible(note),
-        startSource: meetingRecordingRequest.startSource,
-      },
-      trigger: meetingRecordingRequest.trigger,
-      canAutoStart: canAutoStartMeeting,
-      onSuppressed: () =>
-        meetingRecordingRequest.noteSessionId
-          ? window.electronAPI?.meetingNoteOpenedWithoutRecording?.(
-              meetingRecordingRequest.noteSessionId
-            )
-          : undefined,
-      startRecording: storeStartRecording,
-      restoreFromMeetingMode: async () => {
-        await window.electronAPI?.restoreFromMeetingMode?.();
-      },
-      onHandled: () => onMeetingRecordingRequestHandled?.(),
-    }).catch((error) => {
-      logger.warn(
-        "Failed to handle automatic meeting recording request",
-        { error: (error as Error).message },
-        "meeting"
-      );
-    });
-  }, [
-    meetingRecordingRequest,
-    canAutoStartMeeting,
-    activeNoteId,
-    activeNote,
-    onMeetingRecordingRequestHandled,
-    user,
-    t,
-  ]);
-
   // Final and periodic transcript persistence live in MeetingRecordingMount /
   // the store — this view can be unmounted when an auto-end stop fires.
   const isActiveNoteRecording =
     voiceNoteRecorder.isRecording && voiceNoteRecorder.recordingNoteId === activeNote?.id;
-
-  const runNoteAction = async (action: ActionItem) => {
-    if (!editorNote) return;
-    const {
-      recordingNoteId: liveNoteId,
-      transcript: liveTranscript,
-      isTranscribing: liveIsTranscribing,
-    } = useMeetingRecordingStore.getState();
-    const rawTranscript =
-      (liveIsTranscribing && liveNoteId === activeNote?.id ? liveTranscript : "") ||
-      activeNoteRawTranscript;
-    const noteContent = editorNote.content;
-    const hasNotes = !!noteContent.trim();
-    if (!hasNotes && !rawTranscript) return;
-    // Uploads made before their text moved into the transcript keep it as the
-    // note's text with no transcript; newer ones whose provider named no
-    // speakers store it as segments without any. Either way nothing shows who
-    // speaks, so it runs as a plain transcript (#2666).
-    const transcriptInContent = !rawTranscript && editorNote.note_type === "upload";
-    const segments = parseTranscriptSegments(rawTranscript);
-    const speakerlessText = speakerlessTranscriptText(segments);
-    const transcriptText = transcriptInContent ? noteContent : (speakerlessText ?? rawTranscript);
-
-    let formattedTranscript = "";
-    let meetingContext = "";
-    let isMeetingNote = false;
-    let hasPlainTranscript = false;
-    let knownPeople: MentionPerson[] = [];
-    if (transcriptText) {
-      const recordedByUser = isNoteRecorder(editorNote, user?.id);
-      const noteSpace = spaces.find((s) => s.id === editorNote.space_id);
-      const recorderId = noteRecorderUserId(editorNote);
-      const recorder =
-        !recordedByUser && recorderId && noteSpace?.kind === "team" && noteSpace.cloud_space_id
-          ? ((await fetchSpaceRoster(noteSpace.cloud_space_id).catch(() => [])).find(
-              (member) => member.user_id === recorderId
-            ) ?? null)
-          : null;
-      const identity: MeetingIdentity = resolveNoteRecorder({
-        recordedByUser,
-        user,
-        recorder,
-        participants: parseNoteParticipants(editorNote.participants),
-      });
-      if (segments.length > 0 && speakerlessText === null) {
-        isMeetingNote = true;
-        const mappingRows =
-          (await window.electronAPI?.getSpeakerMappings?.(editorNote.id).catch(() => [])) || [];
-        const speakerMappings: Record<string, string> = {};
-        for (const m of mappingRows) speakerMappings[m.speaker_id] = m.display_name;
-
-        const selfLabel = recorderLlmLabel(identity, recordedByUser, t);
-        const viewerLabel = user?.name?.trim() || user?.email?.trim() || t("notes.speaker.you");
-        meetingContext = buildMeetingContext(identity, selfLabel);
-        formattedTranscript = buildLlmTranscript(
-          segments,
-          speakerMappings,
-          selfLabel,
-          t,
-          viewerLabel
-        );
-        knownPeople = collectKnownPeople(identity, speakerMappings, segments);
-      } else {
-        // Plain text shows no speakers, so the run gets no Meeting Context: the model
-        // can't tell who "I" is, and an invitee list invites guessed owners. The user
-        // and the invitees still turn an owner the transcript names into a mention (#2666).
-        hasPlainTranscript = true;
-        knownPeople = collectKnownPeople(identity, {}, []);
-      }
-      if (!formattedTranscript) {
-        formattedTranscript = transcriptText;
-      }
-    }
-
-    const { input, fromSummary, material } = buildNoteRunInput(action, {
-      summary: editorEnhancedContent,
-      notes: transcriptInContent ? "" : noteContent,
-      meetingContext,
-      transcript: formattedTranscript,
-    });
-    runAction(action, input, makeContentHash(`${noteContent}\n${rawTranscript}`), {
-      isCloudMode,
-      modelId: effectiveModelId,
-      isMeetingNote,
-      hasPlainTranscript,
-      knownPeople,
-      fromSummary,
-      material,
-      allowTitleGeneration: isRegenerableNoteTitle(editorNote.title, [
-        t("notes.list.untitledNote"),
-        t("notes.list.newNote"),
-        t("notes.sidebar.newNote"),
-      ]),
-    });
-  };
-
-  if (!isOnboardingComplete) {
-    return (
-      <>
-        <NotesOnboarding onComplete={completeOnboarding} />
-        <NotesStructureIntroDialog
-          open={showStructureIntro}
-          onOpenChange={handleStructureIntroOpenChange}
-        />
-      </>
-    );
-  }
 
   return (
     <div className="flex h-full">
@@ -1164,7 +855,6 @@ export default function PersonalNotesView({
             onPointerDown={notesListResize.startResize}
           />
           <SpacesTree
-            onFlushPendingSaves={savePendingNow}
             onDeleteNote={handleDelete}
             onMoveNote={handleMoveNote}
             onCreateFolderAndMove={handleCreateFolderAndMove}
@@ -1203,26 +893,10 @@ export default function PersonalNotesView({
                     }
                   : undefined
               }
-              diarizationSessionId={diarizationSessionId}
-              onLiveSpeakerLock={lockSpeaker}
-              sessionDiarizationEnabled={sessionDiarizationEnabled}
-              sessionExpectedCount={sessionExpectedCount}
-              userTouchedStepper={userTouchedStepper}
-              onSetSessionDiarizationEnabled={setSessionDiarizationEnabled}
-              onSetSessionExpectedCount={setSessionExpectedCount}
               folderName={activeFolderName}
-              linkedEvent={linkedEvent}
               folders={editorFolders}
               onMoveToFolder={handleMoveToFolder}
               onCreateFolderAndMove={handleCreateFolderAndMove}
-              onCancelPendingSaves={cancelPendingSaves}
-              onFlushPendingSaves={savePendingNow}
-              actionProcessingState={actionProcessingState}
-              actionName={actionName}
-              actionProgress={actionProgress}
-              onCancelAction={cancelAction}
-              onRunNoteAction={runNoteAction}
-              onManageActions={setManagerKind}
             />
           </>
         ) : activeContext && overviewSpace ? (

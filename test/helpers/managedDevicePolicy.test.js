@@ -349,7 +349,9 @@ test("an inaccessible Linux deployment fails closed on its first read", async ()
 });
 
 function linuxFileSystem(files, overrides = {}) {
+  const constants = { O_RDONLY: 0, O_NOFOLLOW: 0x20000 };
   return {
+    constants,
     lstat: async () => ({
       uid: 0,
       mode: 0o755,
@@ -359,7 +361,7 @@ function linuxFileSystem(files, overrides = {}) {
     }),
     stat: async () => ({ uid: 0, mode: 0o755 }),
     open: async (filePath, flags) => {
-      assert.ok(flags & require("node:fs").constants.O_NOFOLLOW);
+      assert.ok(flags & constants.O_NOFOLLOW);
       const value = files[filePath.split("/").at(-1)];
       if (value === undefined) throw Object.assign(new Error("missing"), { code: "ENOENT" });
       const data = Buffer.from(typeof value === "string" ? value : JSON.stringify(value));

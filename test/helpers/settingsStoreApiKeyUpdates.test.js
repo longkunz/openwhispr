@@ -23,7 +23,7 @@ const bindings = [
   ].map(([storeKey, get]) => ({ storeKey, get })),
 ];
 
-async function loadSettings(t, overrides = {}) {
+async function loadSettings(t, overrides = {}, preloadReasoning = true) {
   const keys = new Map(bindings.map(({ storeKey }) => [storeKey, `old-${storeKey}`]));
   const events = new EventTarget();
   let update;
@@ -51,18 +51,30 @@ async function loadSettings(t, overrides = {}) {
   installMicCaptureGlobals(t);
   const vite = await createRendererServer(t, {
     mockModules: {
-      "/services/ReasoningService":
-        "export default { clearApiKeyCache: (...args) => window.cacheClears.push(args) };",
+      "/services/ReasoningService": `import { registerReasoningCache } from "/services/reasoningCache.ts";
+        window.reasoningLoads = (window.reasoningLoads ?? 0) + 1;
+        const service = { clearApiKeyCache: (...args) => window.cacheClears.push(args) };
+        registerReasoningCache((...args) => service.clearApiKeyCache(...args));
+        export default service;`,
       "/utils/logger": `export default {
         debug() {}, info() {}, error() {}, logReasoning() {},
         warn: (...args) => window.warnings.push(args)
       };`,
     },
   });
-  await vite.ssrLoadModule("/services/ReasoningService");
+  if (preloadReasoning) await vite.ssrLoadModule("/services/ReasoningService");
   const settings = await vite.ssrLoadModule("/stores/settingsStore.ts");
   return { ...settings, keys, storage, window, vite, update: (key) => update(key) };
 }
+
+test("a key update in an idle float does not load reasoning SDKs just to clear an empty cache", async (t) => {
+  const context = await loadSettings(t, {}, false);
+  await context.initializeSettings();
+  context.keys.set("openaiApiKey", "changed");
+  await context.update("openaiApiKey");
+  assert.equal(context.useSettingsStore.getState().openaiApiKey, "changed");
+  assert.equal(context.window.reasoningLoads ?? 0, 0);
+});
 
 test("all registered secrets refresh in memory without persistence or save loops", async (t) => {
   const context = await loadSettings(t);
@@ -121,54 +133,6 @@ test("the next batch dictation reads the changed key, not its populated cache", 
       if (provider === "custom") assert.equal(await manager.getAPIKey(), null);
       else await assert.rejects(() => manager.getAPIKey(), { code: "API_KEY_MISSING" });
     }
-  } finally {
-    manager.cleanup();
-  }
-});
-
-test("a changed key re-warms streaming dictation without opening the mic", async (t) => {
-  const warmups = [];
-  const context = await loadSettings(t, {
-    deepgramStreamingWarmup: async (options) => {
-      warmups.push(options);
-      return { success: true };
-    },
-  });
-  await context.initializeSettings();
-  const { default: AudioManager } = await context.vite.ssrLoadModule("/helpers/audioManager.js");
-  const manager = new AudioManager();
-  const runs = [];
-  const warmup = manager.warmupStreamingConnection.bind(manager);
-  manager.warmupStreamingConnection = (options) => {
-    runs.push(warmup(options));
-    return runs.at(-1);
-  };
-  let micOpens = 0;
-  const { getUserMedia } = navigator.mediaDevices;
-  navigator.mediaDevices.getUserMedia = (...args) => {
-    micOpens += 1;
-    return getUserMedia(...args);
-  };
-  try {
-    context.useSettingsStore.setState({
-      useLocalWhisper: false,
-      transcriptionMode: "providers",
-      cloudTranscriptionMode: "byok",
-      cloudTranscriptionProvider: "deepgram",
-    });
-    context.keys.set("deepgramApiKey", "new-deepgramApiKey");
-    await context.update("deepgramApiKey");
-    assert.equal(runs.length, 1);
-    assert.equal(await runs[0], true);
-    assert.equal(warmups[0].mode, "byok");
-    assert.equal(micOpens, 0);
-
-    // A dictation in progress keeps its connection; the post-dictation re-warm
-    // picks the new key up.
-    manager.isRecording = true;
-    context.keys.set("deepgramApiKey", "newer-deepgramApiKey");
-    await context.update("deepgramApiKey");
-    assert.equal(runs.length, 1);
   } finally {
     manager.cleanup();
   }

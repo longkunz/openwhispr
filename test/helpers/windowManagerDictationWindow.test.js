@@ -221,7 +221,11 @@ test("overlay links open in the browser, never an in-app window or a local file"
   opened.length = 0;
   let prevented = 0;
   const event = { preventDefault: () => (prevented += 1) };
-  listeners.get("will-navigate")(event, "file:///app/index.html?panel=false");
+  listeners.get("will-navigate")(
+    event,
+    require("node:url").pathToFileURL(require("node:path").resolve("/app/index.html")).href +
+      "?panel=false"
+  );
   listeners.get("will-navigate")(event, "https://attacker.example/");
   listeners.get("will-navigate")(event, "file:///C:/Windows/System32/cmd.exe");
   assert.equal(prevented, 2, "only the app's own reload may navigate the window");

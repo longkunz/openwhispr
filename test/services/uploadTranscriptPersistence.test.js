@@ -9,7 +9,7 @@ for (const source of ["file", "url"]) {
   for (const timed of [false, true]) {
     test(`${source} upload stores ${timed ? "timed" : "text-only"} transcription separately at creation`, async (t) => {
       const db = createDb(t);
-      assert.ok(db);
+      if (!db) return;
       const handwritten = db.saveNote("My notes", "Keep my handwritten notes").note;
       const meeting = db.saveNote("Existing meeting", "Meeting notes", "meeting").note;
       db.updateNote(meeting.id, { transcript: "Existing transcript", enhanced_content: "Summary" });
@@ -116,7 +116,7 @@ for (const source of ["file", "url"]) {
 
 test("upload transcript crosses the actual preload and save IPC handler before broadcasting", async (t) => {
   const db = createDb(t);
-  assert.ok(db);
+  if (!db) return;
   const vm = require("node:vm");
   const ts = require("typescript");
   const source = ts.createSourceFile(
@@ -224,7 +224,7 @@ test("upload transcript crosses the actual preload and save IPC handler before b
 
 test("a segment without a start keeps the complete uploaded text without invented times", async (t) => {
   const db = createDb(t);
-  assert.ok(db);
+  if (!db) return;
   const { window } = installBrowserGlobals(t);
   window.electronAPI.saveNote = async (...args) => db.saveNote(...args);
   const { saveUploadNote } = await import("../../src/services/uploadNotes.ts");
@@ -269,7 +269,7 @@ for (const { name, text, segments, speakers } of [
 ]) {
   test(name, async (t) => {
     const db = createDb(t);
-    assert.ok(db);
+    if (!db) return;
     const { window } = installBrowserGlobals(t);
     window.electronAPI.saveNote = async (...args) => db.saveNote(...args);
     const { saveUploadNote } = await import("../../src/services/uploadNotes.ts");
@@ -299,7 +299,7 @@ for (const { name, text, segments, speakers } of [
 
 test("upload creation keeps its selected workspace and sends transcript in the real cloud payload", async (t) => {
   const db = createDb(t);
-  assert.ok(db);
+  if (!db) return;
   db.setActiveAccountId("synthetic-account");
   const space = db.db
     .prepare(

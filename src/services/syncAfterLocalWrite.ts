@@ -13,3 +13,13 @@ export function syncAfterLocalWrite(
     if (syncService.canSync()) void syncService[method]();
   });
 }
+
+export function syncTranscriptionAfterLocalWrite(id: number): void {
+  if (typeof localStorage === "undefined" || localStorage.getItem("cloudBackupEnabled") !== "true")
+    return;
+  void import("./SyncService.js")
+    .then(({ syncService }) => {
+      syncService.debouncedPush("transcription", id);
+    })
+    .catch((error) => console.warn("Failed to schedule transcription sync", error));
+}

@@ -480,6 +480,8 @@ async function extractZipWindows(zipPath, destDir) {
   }
 
   const command =
+    "$ErrorActionPreference = 'Stop'; " +
+    "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Archive') -Force; " +
     `Expand-Archive -Force -LiteralPath '${escapePowerShellSingleQuoted(zipPath)}' ` +
     `-DestinationPath '${escapePowerShellSingleQuoted(destDir)}'`;
 

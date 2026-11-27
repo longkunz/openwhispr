@@ -2,7 +2,7 @@
   "settings": {
     "language": {
       "sectionTitle": "Language",
-      "sectionDescription": "Set interface and transcription languages independently",
+      "sectionDescription": "The interface is in English. Choose your transcription language below.",
       "uiLabel": "Interface language",
       "uiDescription": "Choose the language used throughout OpenWhispr's interface",
       "transcriptionLabel": "Transcription language",

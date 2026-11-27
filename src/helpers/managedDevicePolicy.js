@@ -135,7 +135,8 @@ function normalizeDeviceValues(input) {
 async function readTrustedJson(filePath, { fileSystem = fs.promises, ownerId = 0 } = {}) {
   let handle;
   try {
-    handle = await fileSystem.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const constants = fileSystem.constants || fs.constants;
+    handle = await fileSystem.open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
     const stat = await handle.stat();
     if (
       !stat.isFile() ||
@@ -164,7 +165,7 @@ async function readLinuxValues({
 } = {}) {
   try {
     const stat = await fileSystem.lstat(directory);
-    const parent = await fileSystem.stat(path.dirname(directory));
+    const parent = await fileSystem.stat(path.posix.dirname(directory));
     if (
       !stat.isDirectory() ||
       stat.isSymbolicLink() ||
@@ -179,8 +180,8 @@ async function readLinuxValues({
     throw error;
   }
   const [policy, device] = await Promise.all([
-    readTrustedJson(path.join(directory, "policy.json"), { fileSystem, ownerId }),
-    readTrustedJson(path.join(directory, "device.json"), { fileSystem, ownerId }),
+    readTrustedJson(path.posix.join(directory, "policy.json"), { fileSystem, ownerId }),
+    readTrustedJson(path.posix.join(directory, "device.json"), { fileSystem, ownerId }),
   ]);
   if (device !== undefined && !isPlainObject(device)) {
     throw invalidDeployment("Invalid Linux device settings");
@@ -347,11 +348,11 @@ async function hasPolicyEvidence({
   const preferences = `${MACOS_PREFERENCES_DOMAIN}.plist`;
   const files =
     platform === "linux"
-      ? ["policy.json", "device.json"].map((name) => path.join(LINUX_POLICY_DIRECTORY, name))
+      ? ["policy.json", "device.json"].map((name) => path.posix.join(LINUX_POLICY_DIRECTORY, name))
       : platform === "darwin"
         ? [
-            path.join("/Library/Managed Preferences", preferences),
-            path.join("/Library/Managed Preferences", os.userInfo().username, preferences),
+            path.posix.join("/Library/Managed Preferences", preferences),
+            path.posix.join("/Library/Managed Preferences", os.userInfo().username, preferences),
           ]
         : [];
   const found = await Promise.all(

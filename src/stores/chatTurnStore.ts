@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { registerControlPanelReleaseGuard } from "../utils/controlPanelRelease";
 import i18n from "../i18n";
 import type {
   ChatTurnEngine,
@@ -80,6 +81,12 @@ export const useChatTurnStore = create<ChatTurnState>(() => ({
   newChatSkills: NO_CHAT_SKILLS,
   conversationSkills: {},
 }));
+
+registerControlPanelReleaseGuard(() =>
+  Object.values(useChatTurnStore.getState().entries).every(
+    (entry) => !entry.running && !entry.settling
+  )
+);
 
 interface Submission {
   key: string;

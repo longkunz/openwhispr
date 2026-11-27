@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { registerControlPanelReleaseGuard } from "../utils/controlPanelRelease";
 import i18n from "../i18n";
 import { transcribeFileWithSpeakers } from "../services/fileTranscription";
 import type { FileTranscriptionConfig, DiarizationSettings } from "../services/fileTranscription";
@@ -60,6 +61,8 @@ export const useBatchQueueStore = create<BatchQueueStoreState>()(() => ({
   queue: [],
   isProcessing: false,
 }));
+
+registerControlPanelReleaseGuard(() => !useBatchQueueStore.getState().isProcessing);
 
 // Bumping the run id soft-cancels the drain loop; active uploads
 // additionally get a true backend abort via cancel-upload-transcription. The

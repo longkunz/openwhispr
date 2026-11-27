@@ -3,7 +3,16 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
-const { compareVersions } = require("../src/helpers/parakeetCapability");
+
+function compareVersions(left, right) {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const difference = (a[i] || 0) - (b[i] || 0);
+    if (difference) return difference;
+  }
+  return 0;
+}
 
 // Use the packaged Electron ABI and SQLite, including the FTS5 initialization
 // that raised SIGILL before the first window on CPUs without AVX2 (#3038). The

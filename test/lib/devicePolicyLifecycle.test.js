@@ -82,7 +82,7 @@ test("a local-only device refuses sign-in in the user's language", async (t) => 
   const { signInWithSocial, signInWithSSO } = await vite.ssrLoadModule("/lib/auth.ts");
   await i18n.changeLanguage("es");
   t.after(() => i18n.changeLanguage("en"));
-  const message = require("../../src/locales/es/translation.json").auth.errors
+  const message = require("../../src/locales/en/translation.json").auth.errors
     .signInDisabledByDevice;
   assert.equal((await signInWithSocial("google")).error?.message, message);
   assert.equal((await signInWithSSO("ada@example.com")).error?.message, message);

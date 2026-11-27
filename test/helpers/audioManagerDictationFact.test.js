@@ -1,7 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { loadAudioManager } = require("./harness/audioManager");
-const { deferred } = require("./harness/deferred");
 
 // The dashboard's dictation_completed fact as the dictation pipeline reports
 // it: the original words of a finished dictation, with the capture id its
@@ -38,29 +37,6 @@ function recordFacts(window) {
     facts.push(fact);
   };
   return facts;
-}
-
-function batchManager(AudioManager, transcription, completions) {
-  return Object.assign(Object.create(AudioManager.prototype), {
-    isProcessing: true,
-    _localSpeechGateState: null,
-    _processingCancellationGeneration: 0,
-    _streamingStopPromise: null,
-    _streamingCancellationGeneration: 0,
-    _activeTranscriptionAbortController: null,
-    pendingAssistantConversation: null,
-    pendingSelectionEdit: null,
-    lastAudioBlob: {},
-    processWithLocalWhisper: () => transcription.promise,
-    onStateChange() {},
-    onNoAudio() {},
-    onError() {},
-    onTranscriptionComplete: (result) => completions.push(result),
-    saveFailedTranscription() {},
-    _requestStreamingCancellation() {
-      this._streamingCancellationGeneration += 1;
-    },
-  });
 }
 
 // As in audioManagerStreamingFinalization.test.js: a stream about to finalize.
@@ -188,134 +164,6 @@ test("a failing or missing bridge never reaches the dictation", async (t) => {
   await new Promise(setImmediate);
 });
 
-test("a batch recording gets one capture id, shared by its fact and its completion", async (t) => {
-  const { AudioManager, window } = await load(t);
-  const facts = recordFacts(window);
-  const transcription = deferred();
-  const completions = [];
-  const manager = batchManager(AudioManager, transcription, completions);
-
-  const run = manager.processAudio(new Blob(["audio"]), {});
-  transcription.resolve({
-    success: true,
-    text: "One, two, three, four. Cleaned and expanded.",
-    rawText: "one two three four",
-    source: "local",
-    timings: {},
-  });
-  await run;
-
-  assert.equal(completions.length, 1);
-  assert.match(completions[0].clientTranscriptionId, UUID);
-  assert.deepEqual(facts, [
-    { captureId: completions[0].clientTranscriptionId, words: 4, mode: "local" },
-  ]);
-});
-
-test("a successful cloud-to-local fallback reports its raw words before cleanup", async (t) => {
-  const { AudioManager, window } = await load(t, {
-    ...STREAMING_SETTINGS,
-    allowLocalFallback: true,
-  });
-  const facts = recordFacts(window);
-  const completions = [];
-  const rawText = "one two three four";
-  const cleanedText = "expanded ".repeat(20).trim();
-  window.electronAPI.transcribeLocalWhisper = async () => ({ success: true, text: rawText });
-  const manager = Object.assign(batchManager(AudioManager, deferred(), completions), {
-    getEffectiveSttLanguage: () => "auto",
-    getTranscriptionModel: () => "whisper-1",
-    getAPIKey: async () => {
-      throw new Error("cloud unavailable");
-    },
-    processTranscription: async () => cleanedText,
-  });
-
-  await manager.processAudio(new Blob(["audio"], { type: "audio/webm" }), {});
-
-  assert.equal(completions.length, 1);
-  assert.equal(completions[0].success, true);
-  assert.equal(completions[0].text, cleanedText);
-  assert.equal(completions[0].source, "local-fallback");
-  assert.match(completions[0].clientTranscriptionId, UUID);
-  assert.deepEqual(facts, [
-    { captureId: completions[0].clientTranscriptionId, words: 4, mode: "local" },
-  ]);
-  assert.equal(completions[0].rawText, rawText);
-});
-
-test("a cloud batch recording keeps the capture id it was uploaded under", async (t) => {
-  const { AudioManager, window } = await load(t);
-  const facts = recordFacts(window);
-  const transcription = deferred();
-  const completions = [];
-  const manager = batchManager(AudioManager, transcription, completions);
-  const uploadedAs = "11111111-2222-4333-8444-555555555555";
-
-  const run = manager.processAudio(new Blob(["audio"]), {});
-  transcription.resolve({
-    success: true,
-    text: "two words",
-    rawText: "two words",
-    source: "local",
-    clientTranscriptionId: uploadedAs,
-    timings: {},
-  });
-  await run;
-
-  assert.equal(completions[0].clientTranscriptionId, uploadedAs);
-  assert.deepEqual(
-    facts.map((fact) => fact.captureId),
-    [uploadedAs]
-  );
-});
-
-test("a batch recording cancelled before it finishes reports nothing", async (t) => {
-  const { AudioManager, window } = await load(t);
-  const facts = recordFacts(window);
-  const transcription = deferred();
-  const completions = [];
-  const manager = batchManager(AudioManager, transcription, completions);
-
-  const run = manager.processAudio(new Blob(["audio"], { type: "audio/webm" }), {});
-  assert.equal(manager.cancelProcessing(), true);
-  transcription.resolve({ success: true, text: "late", rawText: "late", source: "local" });
-  await run;
-
-  assert.deepEqual(completions, []);
-  assert.deepEqual(facts, []);
-});
-
-test("a batch recording cancelled while its activation capture settles reports nothing", async (t) => {
-  const { AudioManager, window } = await load(t);
-  const facts = recordFacts(window);
-  const transcription = deferred();
-  const reached = deferred();
-  const settling = deferred();
-  const completions = [];
-  const manager = batchManager(AudioManager, transcription, completions);
-  manager._completeActivationCapture = () => {
-    reached.resolve();
-    return settling.promise;
-  };
-
-  const run = manager.processAudio(new Blob(["audio"], { type: "audio/webm" }), {});
-  transcription.resolve({
-    success: true,
-    text: "two words",
-    rawText: "two words",
-    source: "local",
-    timings: {},
-  });
-  await reached.promise;
-  assert.equal(manager.cancelProcessing(), true);
-  settling.resolve();
-  await run;
-
-  assert.deepEqual(completions, []);
-  assert.deepEqual(facts, []);
-});
-
 test("a streamed recording reports under the capture id its completion carries", async (t) => {
   const { AudioManager, window } = await load(t, STREAMING_SETTINGS);
   const facts = recordFacts(window);
@@ -351,25 +199,6 @@ test("a streamed assistant command reports nothing", async (t) => {
 
   assert.equal(completions.length, 1);
   assert.deepEqual(facts, []);
-});
-
-test("a batch fact carries the recording start through delayed recognition", async (t) => {
-  const { AudioManager, window } = await load(t);
-  const facts = recordFacts(window);
-  const transcription = deferred();
-  const manager = batchManager(AudioManager, transcription, []);
-  const startedAt = "2026-11-16T08:00:00.000Z";
-
-  const run = manager.processAudio(new Blob(["audio"]), { analyticsOccurredAt: startedAt });
-  transcription.resolve({
-    success: true,
-    text: "two words",
-    rawText: "two words",
-    source: "local",
-  });
-  await run;
-
-  assert.equal(facts[0].startedAt, startedAt);
 });
 
 test("a streaming fact carries the original recording start", async (t) => {

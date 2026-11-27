@@ -17,13 +17,9 @@ async function renderMenu(t, props) {
       buttonRef: { current: null },
       align: "right",
       isRecording: false,
-      agentAllowed: true,
-      meetingAllowed: true,
       isHovered: false,
       setWindowInteractivity: () => {},
       onToggleListening: () => {},
-      onAskAssistant: () => {},
-      onStartMeeting: () => {},
       onHide: () => {},
       onClose: () => {},
       ...props,
@@ -31,9 +27,10 @@ async function renderMenu(t, props) {
   );
 }
 
-test("the command menu hides Ask Assistant while a recording is active", async (t) => {
+test("the local command menu has no retired Assistant action", async (t) => {
   const idleMarkup = await renderMenu(t, { isRecording: false });
-  assert.match(idleMarkup, /askAssistant/);
+  assert.doesNotMatch(idleMarkup, /askAssistant/);
+  assert.match(idleMarkup, /startListening/);
 
   const recordingMarkup = await renderMenu(t, { isRecording: true });
   assert.doesNotMatch(recordingMarkup, /askAssistant/);
@@ -64,8 +61,8 @@ test("the command menu anchors on the pill's docked side", async (t) => {
   }
 });
 
-test("the command menu offers a meeting recording only while idle and allowed", async (t) => {
-  assert.match(await renderMenu(t, {}), /startMeetingRecording/);
+test("the command menu has no retired meeting shortcut", async (t) => {
+  assert.doesNotMatch(await renderMenu(t, {}), /startMeetingRecording/);
   assert.doesNotMatch(await renderMenu(t, { isRecording: true }), /startMeetingRecording/);
   assert.doesNotMatch(await renderMenu(t, { meetingAllowed: false }), /startMeetingRecording/);
 });

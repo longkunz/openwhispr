@@ -5,6 +5,9 @@ const path = require("path");
 const os = require("os");
 const Module = require("node:module");
 const cp = require("child_process");
+const POWERSHELL_ARCHIVE_PREFIX =
+  "$ErrorActionPreference = 'Stop'; " +
+  "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Archive') -Force; ";
 
 // Minimal valid zip: single file "test-file.txt" containing "hello from test\n"
 const ZIP_FIXTURE_B64 =
@@ -182,7 +185,8 @@ test("extractArchive falls back to PowerShell when Windows tar rejects a zip arc
         args: [
           "-NoProfile",
           "-Command",
-          "Expand-Archive -Force -LiteralPath 'C:\\cache\\binary.zip' -DestinationPath 'C:\\cache\\extract'",
+          POWERSHELL_ARCHIVE_PREFIX +
+            "Expand-Archive -Force -LiteralPath 'C:\\cache\\binary.zip' -DestinationPath 'C:\\cache\\extract'",
         ],
       },
     ]);
@@ -219,7 +223,8 @@ test("extractArchive PowerShell fallback quotes apostrophe paths safely", async 
     assert.deepEqual(execCalls[0].args, [
       "-NoProfile",
       "-Command",
-      "Expand-Archive -Force -LiteralPath 'C:\\Users\\O''Brien\\cache\\binary.zip' -DestinationPath 'C:\\Users\\O''Brien\\cache\\extract'",
+      POWERSHELL_ARCHIVE_PREFIX +
+        "Expand-Archive -Force -LiteralPath 'C:\\Users\\O''Brien\\cache\\binary.zip' -DestinationPath 'C:\\Users\\O''Brien\\cache\\extract'",
     ]);
   } finally {
     cp.execFile = originalExecFile;
@@ -247,6 +252,8 @@ test(
       await extractArchive(zipPath, dest);
       const content = fs.readFileSync(path.join(dest, "test-file.txt"), "utf8");
       assert.equal(content.trim(), "hello from test");
+      fs.writeFileSync(zipPath, "invalid zip");
+      await assert.rejects(extractArchive(zipPath, dest), /Zip extraction failed/);
     } finally {
       delete require.cache[downloadUtilsPath];
       fs.rmSync(tmp, { recursive: true, force: true });

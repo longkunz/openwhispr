@@ -1,21 +1,17 @@
-import React, { Suspense, useEffect, useState } from "react";
+import React, { Suspense, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import App from "./App.jsx";
-import MeetingNotificationOverlay from "./components/MeetingNotificationOverlay.tsx";
-import { PermissionGuideOverlay } from "./components/onboarding/PermissionGuideOverlay";
-import { useAuth } from "./hooks/useAuth";
-import { useControlPanelWindowDrag } from "./hooks/useControlPanelWindowDrag";
 import { useTheme } from "./hooks/useTheme";
-import { mirrorActiveAccountScope } from "./lib/accountScopeMirror";
 import { usePolicyStore } from "./stores/policyStore";
-import { useSettingsStore } from "./stores/settingsStore";
-import { signOut } from "./lib/auth";
 import { Button } from "./components/ui/button";
-import { resolveMacAccessibilityReadiness } from "./utils/macAccessibilityReadiness.ts";
-import { isAgentWindow, isControlPanelWindow } from "./utils/windowContext.ts";
+import { isControlPanelWindow } from "./utils/windowContext.ts";
 
-const ControlPanel = React.lazy(() => import("./components/ControlPanel.tsx"));
-const AgentWindow = React.lazy(() => import("./components/agent/AgentWindow.tsx"));
+const ControlPanelApp = React.lazy(() => import("./ControlPanelApp.jsx"));
+const DictationApp = React.lazy(() => import("./DictationApp.jsx"));
+const PermissionGuideOverlay = React.lazy(() =>
+  import("./components/onboarding/PermissionGuideOverlay").then((module) => ({
+    default: module.PermissionGuideOverlay,
+  }))
+);
 
 export default function AppRouter() {
   useTheme();
@@ -49,7 +45,9 @@ export default function AppRouter() {
         )}
         action={
           workspaceRequired ? (
-            <Button onClick={() => void signOut()}>{t("common.logout")}</Button>
+            <Button onClick={() => void import("./lib/auth").then(({ signOut }) => signOut())}>
+              {t("common.logout")}
+            </Button>
           ) : undefined
         }
       />
@@ -57,120 +55,17 @@ export default function AppRouter() {
   }
   const params = window.location.search;
 
-  if (params.includes("permission-guide=true")) return <PermissionGuideOverlay />;
-
-  if (params.includes("meeting-notification=true")) {
-    return <MeetingNotificationOverlay />;
-  }
-
-  // Before MainApp: it reports the onboarding state, which only the dictation
-  // window and the control panel may do.
-  if (isAgentWindow()) {
+  if (params.includes("permission-guide=true"))
     return (
       <Suspense fallback={null}>
-        <AgentWindow />
+        <PermissionGuideOverlay />
       </Suspense>
     );
-  }
 
-  return <MainApp />;
-}
-
-function MainApp() {
-  const { isSignedIn, isLoaded: authLoaded } = useAuth();
-  const policyStatus = usePolicyStore((state) => state.status);
-  const localOnly = usePolicyStore((state) => state.localOnly);
-  const policyResolved =
-    policyStatus === "managed" ||
-    policyStatus === "unmanaged" ||
-    policyStatus === "error";
-  const autoSyncReady = authLoaded && policyResolved && !localOnly;
-
-  const [isLoading, setIsLoading] = useState(true);
-
-  const isControlPanel = isControlPanelWindow();
-  const isDictationPanel = !isControlPanel;
-  // Covers every surface this window hosts.
-  useControlPanelWindowDrag(isControlPanel);
-
-  useEffect(() => {
-    // Dictation supplies startup preferences, including on a hidden launch.
-    // Opening the control panel can retry a destination that was unavailable.
-    const { noteFilesEnabled, noteFilesPath } = useSettingsStore.getState();
-    void window.electronAPI?.noteFilesSetEnabled?.(noteFilesEnabled, noteFilesPath || undefined, {
-      startup: true,
-    });
-  }, []);
-
-  useEffect(() => {
-    if (isControlPanel) {
-      import("./components/ControlPanel.tsx").catch(() => {});
-    }
-
-    // Sync starts only after auth settles, so a new bearer token cannot touch
-    // the previous account's rows while validation is still running. A failed
-    // (guest/offline) resolution also counts as settled: canSync() then no-ops
-    // because no validated auth context exists.
-    if (autoSyncReady) {
-      import("./services/SyncService.js")
-        .then(({ syncService }) => syncService.startAutoSync())
-        .catch(() => {});
-    }
-  }, [autoSyncReady, isControlPanel]);
-
-  useEffect(() => {
-    // The dictation window cannot resolve a session (see mirrorActiveAccountScope),
-    // so its policy and managed identity follow the main process's account scope.
-    if (!isDictationPanel) return;
-    return mirrorActiveAccountScope();
-  }, [isDictationPanel]);
-
-  useEffect(() => {
-    localStorage.setItem("onboardingCompleted", "true");
-    localStorage.setItem("authenticationSkipped", "true");
-    localStorage.setItem("skipAuth", "true");
-    setIsLoading(false);
-  }, []);
-
-  useEffect(() => {
-    if (!isControlPanel || isLoading) return;
-    void window.electronAPI?.setOnboardingWindowMode?.("restore");
-  }, [isControlPanel, isLoading]);
-
-  useEffect(() => {
-    if (isLoading) return;
-
-    // Release global hotkeys and popup surfaces immediately.
-    void window.electronAPI?.setOnboardingActive?.(false);
-    let cancelled = false;
-    void resolveMacAccessibilityReadiness({
-      normalAppVisible: true,
-      isControlPanel,
-      isSignedIn,
-      authSkipped: true,
-      // The hidden dictation window cannot resolve Better Auth itself. Its
-      // persisted main-process scope proves this is a validated returning user.
-      readActiveAccountScope: window.electronAPI?.getActiveAccountScope,
-    }).then((readiness) => {
-      if (!cancelled && readiness) {
-        window.electronAPI?.markMacAccessibilityFeaturesReady?.(readiness.expectedAccountScope);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [isControlPanel, isLoading, isSignedIn]);
-
-  if (isLoading) {
-    return <LoadingFallback />;
-  }
-
-  return isControlPanel ? (
+  return (
     <Suspense fallback={<LoadingFallback />}>
-      <ControlPanel />
+      {isControlPanelWindow() ? <ControlPanelApp /> : <DictationApp />}
     </Suspense>
-  ) : (
-    <App />
   );
 }
 

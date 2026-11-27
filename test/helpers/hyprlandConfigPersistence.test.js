@@ -28,7 +28,7 @@ function fixture(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hyprland-config-test-"));
   const config = {
     path: path.join(dir, "hyprland.lua"),
-    bindsPath: path.join(dir, "openwhispr-binds.lua"),
+    bindsPath: path.join(dir, "openwhispr-binds.lua").replaceAll("\\", "/"),
     format: "lua",
   };
   try {
@@ -65,6 +65,7 @@ test("replaces the main config atomically through a symlink, preserving its targ
     const target = path.join(dir, "chezmoi-source.lua");
     const original = "-- keep user settings\nreturn {}\n";
     fs.writeFileSync(target, original, { mode: 0o640 });
+    const originalMode = fs.statSync(target).mode & 0o777;
     const realTarget = fs.realpathSync(target);
     fs.symlinkSync(target, config.path);
     let replacements = 0;
@@ -84,7 +85,7 @@ test("replaces the main config atomically through a symlink, preserving its targ
     }
     assert.equal(replacements, 1);
     assert.equal(fs.lstatSync(config.path).isSymbolicLink(), true);
-    assert.equal(fs.statSync(target).mode & 0o777, 0o640);
+    assert.equal(fs.statSync(target).mode & 0o777, originalMode);
     assert.equal(fs.readFileSync(target, "utf8").includes(original.split("\n")[0]), true);
     assert.deepEqual(fs.readdirSync(dir).sort(), ["chezmoi-source.lua", "hyprland.lua"]);
   }));
@@ -173,6 +174,6 @@ test("repeating persistence leaves both an existing loader and unchanged managed
     assert.equal(fs.statSync(config.path).mtimeMs, main.mtimeMs);
     assert.equal(fs.statSync(target).ino, binds.ino);
     assert.equal(fs.statSync(target).mtimeMs, binds.mtimeMs);
-    assert.equal(fs.statSync(target).mode & 0o777, 0o640);
+    assert.equal(fs.statSync(target).mode & 0o777, binds.mode & 0o777);
     assert.equal(fs.lstatSync(config.bindsPath).isSymbolicLink(), true);
   }));

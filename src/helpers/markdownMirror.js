@@ -279,7 +279,7 @@ class MarkdownMirror {
   _slugify(title) {
     const slug = (title || "Untitled")
       .toWellFormed()
-      .replace(/[/\\?%*:|"<>]/g, "-")
+      .replace(/[/\\?%*:|"<>\u0000-\u001f]/g, "-")
       .trim()
       .replace(/\s+/g, "-")
       .toLowerCase();

@@ -32,8 +32,10 @@ function getDesktopFilePath() {
 // directory comes first because that is the only one we may write to.
 function getIconThemePaths() {
   const xdgDataHome = process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share");
-  const systemDataDirs = (process.env.XDG_DATA_DIRS || "/usr/local/share:/usr/share")
-    .split(":")
+  const systemDataDirs = (
+    process.env.XDG_DATA_DIRS || ["/usr/local/share", "/usr/share"].join(path.delimiter)
+  )
+    .split(path.delimiter)
     .filter(Boolean);
   return [xdgDataHome, ...systemDataDirs].map((dir) => path.join(dir, ICON_THEME_SUBPATH));
 }

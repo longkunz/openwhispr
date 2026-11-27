@@ -22,7 +22,7 @@ function handlerBody(channel, nextChannel) {
 test("folder delete handlers rewrite relocated notes into the markdown mirror", () => {
   for (const [channel, nextChannel] of [
     ["db-delete-folder", "db-rename-folder"],
-    ["db-hard-delete-folder", "db-relocate-revoked-folder"],
+    ["db-hard-delete-folder", "db-set-space-sync-status"],
   ]) {
     const source = handlerBody(channel, nextChannel);
     assert.ok(
