@@ -13,40 +13,34 @@ Module._load = function loadTrayWithStubs(request, parent, isMain) {
 const TrayManager = require("../../src/helpers/tray");
 Module._load = originalLoad;
 
-function createTrayManager(calls, { dictating = false, meetingRefusal = null } = {}) {
+function createTrayManager(calls, { dictating = false } = {}) {
   const trayManager = new TrayManager();
   trayManager.windowManager = {
     isDictationPanelVisible: () => false,
     isDictating: () => dictating,
     sendStartDictation: () => calls.push("start-dictation"),
     sendStopDictation: () => calls.push("stop-dictation"),
-    openAgentWindow: () => calls.push("assistant"),
-    startManualMeeting: (options) => calls.push(`meeting from ${options?.startSource}`),
-    getMeetingRecordingRefusal: () => meetingRefusal,
   };
   return trayManager;
 }
 
-test("the tray menu leads with the dictation pill's quick actions", () => {
+test("the tray menu offers dictation without assistant or meeting recording", () => {
   const calls = [];
-  const [listen, assistant, meeting, separator] =
-    createTrayManager(calls).buildContextMenuTemplate();
+  const menu = createTrayManager(calls).buildContextMenuTemplate();
+  const [listen, separator] = menu;
 
-  assert.deepEqual(
-    [listen.label, assistant.label, meeting.label, separator.type],
-    [
-      "app.commandMenu.startListening",
-      "app.commandMenu.askAssistant",
-      "app.commandMenu.startMeetingRecording",
-      "separator",
-    ]
-  );
+  assert.deepEqual([listen.label, separator.type], ["app.commandMenu.startListening", "separator"]);
 
   listen.click();
-  assistant.click();
-  meeting.click();
-  // Each starts in the main process; the assistant opens its own window.
-  assert.deepEqual(calls, ["start-dictation", "assistant", "meeting from tray"]);
+  assert.deepEqual(calls, ["start-dictation"]);
+  assert.equal(
+    menu.some((item) => item.label === "app.commandMenu.askAssistant"),
+    false
+  );
+  assert.equal(
+    menu.some((item) => item.label === "app.commandMenu.startMeetingRecording"),
+    false
+  );
 });
 
 test("the tray's listen item stops the recording it reflects", () => {
@@ -56,13 +50,4 @@ test("the tray's listen item stops the recording it reflects", () => {
   assert.equal(listen.label, "app.commandMenu.stopListening");
   listen.click();
   assert.deepEqual(calls, ["stop-dictation"]);
-});
-
-test("the tray's meeting item is disabled while the org refuses meeting recording", () => {
-  const meetingItem = (meetingRefusal) =>
-    createTrayManager([], { meetingRefusal }).buildContextMenuTemplate()[2];
-
-  assert.equal(meetingItem(null).enabled, true);
-  assert.equal(meetingItem({ code: "POLICY_MEETING_RECORDING_DISABLED" }).enabled, false);
-  assert.equal(meetingItem({ code: "POLICY_UNRESOLVABLE" }).enabled, false);
 });

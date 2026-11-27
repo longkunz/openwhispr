@@ -1101,9 +1101,7 @@ test("transcript exports name the recorder only when the creator, or else the ow
   t.after(() => cleanup());
   const { render, click, latest, unmount, vite } = await loadNoteEditor(t, "editor");
   cleanup = unmount;
-  const { default: ShareNoteDialog } = await vite.ssrLoadModule(
-    "/components/notes/ShareNoteDialog.tsx"
-  );
+  const { DropdownMenuItem } = await vite.ssrLoadModule("/components/ui/dropdown-menu.tsx");
   const formats = ["txt", "srt", "md", "json"];
   for (const [viewer, ownerId, creatorId, expectedLabel] of [
     [bob, "bob", "alice", "Alice Recorder"],
@@ -1131,8 +1129,14 @@ test("transcript exports name the recorder only when the creator, or else the ow
       onExportTranscript: (...args) => exported.push(args),
     });
     await click("transcript");
-    const { exportOptions } = findElementOfType(latest(), ShareNoteDialog).props;
-    exportOptions.forEach((option) => option.onSelect());
+    const exportItems = [];
+    walk(latest(), (node) => {
+      if (node.type === DropdownMenuItem && typeof node.props.onSelect === "function") {
+        exportItems.push(node);
+      }
+    });
+    assert.equal(exportItems.length, formats.length);
+    exportItems.forEach((item) => item.props.onSelect());
     assert.deepEqual(
       exported,
       formats.map((format) => [format, expectedLabel])
@@ -1542,7 +1546,32 @@ test("only the org's meeting switch shows a banner; other restrictions explain t
   await unmount();
 });
 
-test("the copy-link segment opens sharing in place for Private and team notes", async (t) => {
+test("local note exports remain available without sharing or cloud setup", async (t) => {
+  const { render, latest, unmount, vite } = await loadNoteEditor(t);
+  const { DropdownMenuItem } = await vite.ssrLoadModule("/components/ui/dropdown-menu.tsx");
+  const exported = [];
+  const exportItems = () => {
+    const items = [];
+    walk(latest(), (node) => {
+      if (node.type === DropdownMenuItem && typeof node.props.onSelect === "function") {
+        items.push(node);
+      }
+    });
+    return items;
+  };
+  await render(undefined, { onExportNote: (format) => exported.push(format) });
+  assert.deepEqual(
+    exportItems().map((item) => item.props.children),
+    ["notes.editor.asMarkdown", "notes.editor.asPlainText"]
+  );
+  exportItems().forEach((item) => item.props.onSelect());
+  assert.deepEqual(exported, ["md", "txt"]);
+  await render(undefined, { onExportNote: undefined, onExportTranscript: undefined });
+  assert.equal(exportItems().length, 0);
+  await unmount();
+});
+
+test("note sharing and copy-link controls are absent for Private and team notes", async (t) => {
   const { render, latest, unmount, vite } = await loadNoteEditor(t);
   const { loadSpaces } = await vite.ssrLoadModule("/stores/noteStore.ts");
   globalThis.window.electronAPI.getSpaces = async () => [
@@ -1565,16 +1594,11 @@ test("the copy-link segment opens sharing in place for Private and team notes", 
     { space_id: 1, cloud_id: null, is_shared: 0 },
   ]) {
     await render(undefined, { note: { ...NOTE, ...note } });
-    assert.ok(linkSegment(), JSON.stringify(note));
-    await React.act(async () => linkSegment().props.onClick());
-    let dialog = null;
+    assert.equal(linkSegment(), null, JSON.stringify(note));
     walk(latest(), (node) => {
-      if ("copyLinkOnOpen" in node.props) dialog = node;
+      assert.equal("copyLinkOnOpen" in node.props, false);
+      assert.notEqual(node.props.children, "noteEditor.share.button");
     });
-    assert.equal(dialog.props.open, true);
-    assert.equal(dialog.props.copyLinkOnOpen, true);
-    assert.equal(dialog.props.note.space_id, note.space_id);
-    assert.equal(dialog.props.note.cloud_id, note.cloud_id);
   }
   await unmount();
 });
