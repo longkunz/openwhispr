@@ -1,5 +1,6 @@
 import { useRegistryVersion } from "../../hooks/useRegistryVersion";
 import { useState, useRef, useEffect, useId } from "react";
+import { registerControlPanelReleaseGuard } from "../../utils/controlPanelRelease";
 import { useTranslation } from "react-i18next";
 import { useToast } from "../ui/useToast";
 import {
@@ -168,6 +169,8 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
   const { t } = useTranslation();
   const { toast } = useToast();
   const [state, setState] = useState<UploadState>("idle");
+  const releaseAllowed = useRef(false);
+  useEffect(() => registerControlPanelReleaseGuard(() => releaseAllowed.current), []);
   const [file, setFile] = useState<{
     name: string;
     path: string;
@@ -182,6 +185,8 @@ export default function UploadAudioView({ onNoteCreated, onOpenSettings }: Uploa
   );
   const [diarizationWarning, setDiarizationWarning] = useState(false);
   const [noteId, setNoteId] = useState<number | null>(null);
+  releaseAllowed.current =
+    ["idle", "complete", "error"].includes(state) && !(result && noteId == null);
   // The saved note's space: from then on the folder picker files that note, so it lists that
   // space's folders, never the Private of a workspace switched to since (M10).
   const noteSpaceIdRef = useRef<number | null>(null);

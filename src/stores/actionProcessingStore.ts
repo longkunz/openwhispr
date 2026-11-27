@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { registerControlPanelReleaseGuard } from "../utils/controlPanelRelease";
 import { NOTE_OUTPUT_MAX_TOKENS, NOTHING_TO_SUMMARIZE } from "../helpers/builtinActions";
 import { stripThinkingTags } from "../helpers/stripThinking";
 import { compileSummaryActionPrompt, compileTemplatePrompt } from "../helpers/templatePrompts";
@@ -119,6 +120,7 @@ interface ActionProcessingStoreState {
 // by a new run on the same note and revive the run the user just cancelled.
 // The id also tags the run's requests so a cancel can abort them.
 const activeRuns = new Map<number, string>();
+registerControlPanelReleaseGuard(() => activeRuns.size === 0);
 const processingFlags = new Map<number, boolean>();
 const successTimers = new Map<number, NodeJS.Timeout>();
 

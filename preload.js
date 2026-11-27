@@ -506,6 +506,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   startWindowDrag: () => ipcRenderer.invoke("start-window-drag"),
   stopWindowDrag: () => ipcRenderer.invoke("stop-window-drag"),
   startControlPanelDrag: () => ipcRenderer.invoke("start-control-panel-drag"),
+  onControlPanelReleaseRequested: registerListener(
+    "control-panel-release-requested",
+    (callback) => (_event, requestId) => callback(requestId)
+  ),
+  controlPanelReleaseReady: (requestId, ready) =>
+    ipcRenderer.send("control-panel-release-ready", requestId, ready),
   stopControlPanelDrag: () => ipcRenderer.invoke("stop-control-panel-drag"),
   getMainWindowHorizontalDirection: () =>
     ipcRenderer.invoke("get-main-window-horizontal-direction"),

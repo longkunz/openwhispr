@@ -118,6 +118,63 @@ async function mountView(t, updateNote) {
 const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const saves = (calls) => calls.filter(([kind]) => kind === "save");
 
+test("releasing the panel flushes the latest title, body and summary before acknowledging", async (t) => {
+  const calls = await mountView(t);
+  const { prepareControlPanelRelease } = await calls.vite.ssrLoadModule(
+    "/utils/controlPanelRelease.ts"
+  );
+  await React.act(async () => {
+    globalThis.__editorProps.onContentChange(NOTE.id, "Latest body");
+    globalThis.__editorProps.onTitleChange(NOTE.id, "Latest title");
+    globalThis.__editorProps.enhancement.onChange(NOTE.id, "Latest summary");
+  });
+  assert.equal(await prepareControlPanelRelease(), true);
+  assert.deepEqual(saves(calls), [
+    [
+      "save",
+      NOTE.id,
+      {
+        title: "Latest title",
+        content: "Latest body",
+        enhanced_content: "Latest summary",
+      },
+    ],
+  ]);
+  await React.act(() => settle(1100));
+  assert.equal(saves(calls).length, 1, "the debounce cannot write again after release");
+});
+
+test("a failed close flush retains its draft and retries before release", async (t) => {
+  let success = false;
+  const calls = await mountView(t, () => ({ success }));
+  const { prepareControlPanelRelease } = await calls.vite.ssrLoadModule(
+    "/utils/controlPanelRelease.ts"
+  );
+  await React.act(async () => globalThis.__editorProps.onContentChange(NOTE.id, "Unsaved"));
+  assert.equal(await prepareControlPanelRelease(), false);
+  assert.equal(globalThis.__editorProps.note.content, "Unsaved");
+  success = true;
+  assert.equal(await prepareControlPanelRelease(), true);
+  assert.equal(saves(calls).length, 2);
+});
+
+test("an autosave already in flight keeps the panel alive until the database acknowledges", async (t) => {
+  let finish;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const calls = await mountView(t, () => pending);
+  const { prepareControlPanelRelease } = await calls.vite.ssrLoadModule(
+    "/utils/controlPanelRelease.ts"
+  );
+  await React.act(async () => globalThis.__editorProps.onContentChange(NOTE.id, "Saving now"));
+  await React.act(() => settle(1100));
+  assert.equal(saves(calls).length, 1);
+  assert.equal(await prepareControlPanelRelease(), false);
+  await React.act(async () => finish({ success: true }));
+  assert.equal(await prepareControlPanelRelease(), true);
+});
+
 // Typing in the open note retires the assistant's Undo at once, before the
 // editor's delayed save: an Undo clicked in that second would restore the
 // assistant's previous text over what the user just typed.

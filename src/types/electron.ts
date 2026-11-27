@@ -2788,6 +2788,8 @@ declare global {
       startWindowDrag: () => Promise<void>;
       stopWindowDrag: () => Promise<void>;
       startControlPanelDrag: () => Promise<void>;
+      onControlPanelReleaseRequested: (callback: (requestId: number) => void) => () => void;
+      controlPanelReleaseReady: (requestId: number, ready: boolean) => void;
       stopControlPanelDrag: () => Promise<void>;
       setMainWindowInteractivity: (interactive: boolean) => Promise<void>;
       setMainWindowInputRegion: (region: MainWindowInputRegion | null) => Promise<boolean>;

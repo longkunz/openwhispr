@@ -5357,6 +5357,10 @@ class IPCHandlers {
       return await this.windowManager.startControlPanelDrag();
     });
 
+    ipcMain.on("control-panel-release-ready", (event, requestId, ready) =>
+      this.windowManager.completeControlPanelRelease(event.sender, requestId, ready)
+    );
+
     ipcMain.handle("stop-control-panel-drag", async () => {
       return await this.windowManager.stopControlPanelDrag();
     });

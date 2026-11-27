@@ -1,4 +1,5 @@
 import React, { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { prepareControlPanelRelease } from "../utils/controlPanelRelease";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "./ui/button";
@@ -33,10 +34,7 @@ import {
   selectPolicyEffectiveSettings,
   useSettingsStore,
 } from "../stores/settingsStore";
-import {
-  subscribeChatAccountScope,
-  subscribeChatPolicy,
-} from "../stores/chatTurnStore";
+import { subscribeChatAccountScope, subscribeChatPolicy } from "../stores/chatTurnStore";
 import { usePolicyStore } from "../stores/policyStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { startWorkspaceScopeBridge } from "../stores/workspaceScopeBridge";
@@ -133,6 +131,26 @@ interface ControlPanelProps {
 }
 
 export default function ControlPanel({ initialSettingsSection }: ControlPanelProps = {}) {
+  const releaseBlocked = useRef(true);
+  useEffect(() => {
+    let preparing = false;
+    let mounted = true;
+    const dispose = window.electronAPI?.onControlPanelReleaseRequested?.(async (requestId) => {
+      if (preparing) return;
+      preparing = true;
+      try {
+        const ready = !releaseBlocked.current && (await prepareControlPanelRelease());
+        if (mounted)
+          window.electronAPI.controlPanelReleaseReady(requestId, ready && !releaseBlocked.current);
+      } finally {
+        preparing = false;
+      }
+    });
+    return () => {
+      mounted = false;
+      dispose?.();
+    };
+  }, []);
   const { t } = useTranslation();
   useEffect(subscribeMeetingNotificationFolders, []);
   const history = useTranscriptions();
@@ -187,6 +205,7 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     trigger?: string;
     noteSessionId?: string;
   } | null>(null);
+  releaseBlocked.current = isLoading || meetingRecordingRequest !== null || notesHandOff;
   const [gpuBannerDismissed, setGpuBannerDismissed] = useState(
     () => localStorage.getItem("gpuBannerDismissedUnified") === "true"
   );

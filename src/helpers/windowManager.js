@@ -73,6 +73,10 @@ class WindowManager {
     this.controlPanelWindow = null;
     this._resizeMaskTokenCounter = 0;
     this._controlPanelVisibilityTimer = null;
+    this._controlPanelReleaseTimer = null;
+    this._controlPanelReleaseRequest = null;
+    this._controlPanelReleaseSequence = 0;
+    this._releasedControlPanel = null;
     this._onboardingRestoreBounds = null;
     this._onboardingWindowMode = null;
     this._onboardingWindowState = null;
@@ -131,6 +135,7 @@ class WindowManager {
 
     app.on("before-quit", () => {
       this.isQuitting = true;
+      this._cancelControlPanelRelease();
       this.hotkeyManager.unregisterAll();
     });
   }
@@ -1410,7 +1415,9 @@ class WindowManager {
       return;
     }
 
+    const restoringBackgroundPanel = !this._onboardingActive;
     this.controlPanelWindow = new BrowserWindow(CONTROL_PANEL_CONFIG);
+    const panel = this.controlPanelWindow;
     this._onboardingRestoreBounds = null;
     this._onboardingWindowMode = null;
     this._onboardingWindowState = null;
@@ -1435,12 +1442,17 @@ class WindowManager {
     });
 
     this.controlPanelWindow.on("closed", () => {
+      const releasedToTray = this._releasedControlPanel === panel;
+      this._releasedControlPanel = null;
+      this._cancelControlPanelRelease();
       this.meetingDetectionEngine?.closeCurrentMeetingNote?.();
       this._clearControlPanelVisibilityTimer();
       this.endOnboardingDemo();
       this.controlPanelWindow = null;
-      this._onboardingActive = true;
-      this._hideNormalAppSurfaces();
+      if (!releasedToTray) {
+        this._onboardingActive = true;
+        this._hideNormalAppSurfaces();
+      }
       this._onboardingRestoreBounds = null;
       this._onboardingWindowMode = null;
       this._onboardingWindowState = null;
@@ -1452,19 +1464,25 @@ class WindowManager {
     // The initial load may already own a queued note; only release a replaced document's session.
     // On commit, not on start: a navigation will-navigate blocks leaves the document in place.
     let controlPanelDocumentLoaded = false;
+    let releaseAfterLoad = false;
     this.controlPanelWindow.webContents.on("did-navigate", () => {
+      releaseAfterLoad = this._controlPanelReleaseRequest?.panel === panel;
+      this._cancelControlPanelRelease();
       if (!controlPanelDocumentLoaded) return;
       controlPanelDocumentLoaded = false;
       this.meetingDetectionEngine?.closeCurrentMeetingNote?.();
     });
     this.controlPanelWindow.webContents.on("did-finish-load", () => {
       controlPanelDocumentLoaded = true;
-      // Every fresh document starts unresolved. AppRouter releases the gate
-      // only after it commits the normal app, so OAuth/onboarding reloads cannot
-      // expose the dictation pill, hotkeys, or popup surfaces in between.
-      this.setOnboardingActive(true);
+      // Startup still waits for AppRouter's normal-app gate. Recreating an
+      // idle panel must not cancel a dictation already owned by the float.
+      if (!restoringBackgroundPanel) this.setOnboardingActive(true);
       this.endOnboardingDemo();
       this.controlPanelWindow.setTitle(i18nMain.t("window.controlPanelTitle"));
+      if (releaseAfterLoad) {
+        releaseAfterLoad = false;
+        this._requestControlPanelRelease();
+      }
     });
 
     this.controlPanelWindow.webContents.on(
@@ -1734,6 +1752,8 @@ class WindowManager {
     this._onboardingActive = false;
     if (!this._floatingIconAutoHide) this.showDictationPanel();
     this.agentWindow?.prewarm();
+    // A close pressed during initial loading could not ask the renderer yet.
+    this._requestControlPanelRelease();
     return true;
   }
 
@@ -1812,6 +1832,7 @@ class WindowManager {
   showControlPanel({ activate = true } = {}) {
     const win = this.controlPanelWindow;
     if (!win || win.isDestroyed()) return;
+    this._cancelControlPanelRelease();
     this._clearControlPanelVisibilityTimer();
     dockManager.setControlPanelVisible(true);
     if (win.isMinimized()) win.restore();
@@ -1940,6 +1961,59 @@ class WindowManager {
     this.permissionGuide?.close(false, true);
     this.controlPanelWindow.hide();
     dockManager.setControlPanelVisible(false);
+    this._requestControlPanelRelease();
+  }
+
+  _cancelControlPanelRelease() {
+    clearTimeout(this._controlPanelReleaseTimer);
+    this._controlPanelReleaseTimer = null;
+    this._controlPanelReleaseRequest = null;
+  }
+
+  _requestControlPanelRelease() {
+    this._cancelControlPanelRelease();
+    const panel = this.controlPanelWindow;
+    if (
+      this._onboardingActive ||
+      this.isQuitting ||
+      !panel ||
+      panel.isDestroyed() ||
+      panel.isVisible()
+    )
+      return;
+    const requestId = ++this._controlPanelReleaseSequence;
+    this._controlPanelReleaseRequest = { panel, requestId };
+    panel.webContents.send("control-panel-release-requested", requestId);
+    // Busy, still loading, or unresponsive renderers stay resident. Retry after
+    // recording/processing finishes; silence is never permission to destroy.
+    this._controlPanelReleaseTimer = setTimeout(() => this._requestControlPanelRelease(), 5000);
+    this._controlPanelReleaseTimer.unref?.();
+  }
+
+  completeControlPanelRelease(sender, requestId, ready) {
+    const request = this._controlPanelReleaseRequest;
+    const panel = this.controlPanelWindow;
+    if (
+      ready !== true ||
+      !request ||
+      request.requestId !== requestId ||
+      request.panel !== panel ||
+      !panel ||
+      panel.isDestroyed() ||
+      sender !== panel.webContents ||
+      panel.isVisible() ||
+      this._onboardingActive ||
+      this.isQuitting ||
+      this._pendingMeetingNoteNavigation ||
+      this._pendingNoteNavigation
+    )
+      return false;
+    this._cancelControlPanelRelease();
+    this._releasedControlPanel = panel;
+    // The renderer acknowledged durable saves and no active capture/work.
+    // Only this window is destroyed; the dictation window and hotkeys stay live.
+    panel.destroy();
+    return true;
   }
 
   hideDictationPanel() {

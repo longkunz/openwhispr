@@ -1,4 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  holdControlPanel,
+  registerControlPanelReleaseFlusher,
+  registerControlPanelReleaseGuard,
+} from "../../utils/controlPanelRelease";
 import { useTranslation } from "react-i18next";
 import { useShallow } from "zustand/react/shallow";
 import { Plus, Sparkles } from "../icons";
@@ -228,6 +233,8 @@ export default function PersonalNotesView({
   const [showAddNotesDialog, setShowAddNotesDialog] = useState(false);
   const pendingDocumentRef = useRef<PendingDocumentSave | null>(null);
   const pendingEnhancedRef = useRef<PendingEnhancedSave | null>(null);
+  const failedAutosaveRef = useRef(false);
+  useEffect(() => registerControlPanelReleaseGuard(() => !failedAutosaveRef.current), []);
   // The open note's last stored row and the account it was opened under: where a copy goes, and
   // for whom, should the note vanish before a save lands (see rescueLostNoteWrite).
   const openNoteRowRef = useRef<NoteItem | null>(null);
@@ -357,10 +364,19 @@ export default function PersonalNotesView({
   // Sends a save; one refused because its note is gone has its edits rescued.
   const writePendingSave = useCallback(
     async (write: PendingNoteWrite): Promise<NoteMutationResult | null> => {
-      const context = lostNoteContext(write.noteId);
-      const result = await window.electronAPI.updateNote(write.noteId, write.updates);
-      if (result && !result.success) await rescueLostNoteWrite(write, context, result.error);
-      return result ?? null;
+      const release = holdControlPanel();
+      try {
+        const context = lostNoteContext(write.noteId);
+        const result = await window.electronAPI.updateNote(write.noteId, write.updates);
+        if (!result?.success) failedAutosaveRef.current = true;
+        if (result && !result.success) await rescueLostNoteWrite(write, context, result.error);
+        return result ?? null;
+      } catch (error) {
+        failedAutosaveRef.current = true;
+        throw error;
+      } finally {
+        release();
+      }
     },
     [lostNoteContext, rescueLostNoteWrite]
   );
@@ -385,22 +401,27 @@ export default function PersonalNotesView({
   // base. They stay pending until written, so a failed save is retried by its
   // own timer and the draft is never replaced by the store copy meanwhile.
   const savePendingNow = useCallback(async (noteId: number) => {
-    const document =
-      pendingDocumentRef.current?.noteId === noteId ? pendingDocumentRef.current : null;
-    const enhanced =
-      pendingEnhancedRef.current?.noteId === noteId ? pendingEnhancedRef.current : null;
-    for (const write of collectPendingNoteWrites(document, enhanced)) {
-      const result = await window.electronAPI.updateNote(write.noteId, write.updates);
-      if (!result?.success) throw new Error(result?.error ?? "Note save failed");
-    }
-    // Retire only the saves just written; an edit made meanwhile stays pending.
-    if (document && pendingDocumentRef.current === document) {
-      clearTimeout(document.timer);
-      pendingDocumentRef.current = null;
-    }
-    if (enhanced && pendingEnhancedRef.current === enhanced) {
-      clearTimeout(enhanced.timer);
-      pendingEnhancedRef.current = null;
+    const release = holdControlPanel();
+    try {
+      const document =
+        pendingDocumentRef.current?.noteId === noteId ? pendingDocumentRef.current : null;
+      const enhanced =
+        pendingEnhancedRef.current?.noteId === noteId ? pendingEnhancedRef.current : null;
+      for (const write of collectPendingNoteWrites(document, enhanced)) {
+        const result = await window.electronAPI.updateNote(write.noteId, write.updates);
+        if (!result?.success) throw new Error(result?.error ?? "Note save failed");
+      }
+      // Retire only the saves just written; an edit made meanwhile stays pending.
+      if (document && pendingDocumentRef.current === document) {
+        clearTimeout(document.timer);
+        pendingDocumentRef.current = null;
+      }
+      if (enhanced && pendingEnhancedRef.current === enhanced) {
+        clearTimeout(enhanced.timer);
+        pendingEnhancedRef.current = null;
+      }
+    } finally {
+      release();
     }
   }, []);
 
@@ -418,6 +439,25 @@ export default function PersonalNotesView({
 
     return { document, enhanced };
   }, []);
+
+  useEffect(
+    () =>
+      registerControlPanelReleaseFlusher(async () => {
+        const document = pendingDocumentRef.current;
+        const enhanced = pendingEnhancedRef.current;
+        // Stop the debounce before awaiting IPC so its timer cannot race the flush.
+        if (document) clearTimeout(document.timer);
+        if (enhanced) clearTimeout(enhanced.timer);
+        const noteIds = new Set([document?.noteId, enhanced?.noteId]);
+        for (const noteId of noteIds) {
+          if (noteId != null) await savePendingNow(noteId);
+        }
+        if (pendingDocumentRef.current || pendingEnhancedRef.current) {
+          throw new Error("Note changed during close preparation");
+        }
+      }),
+    [savePendingNow]
+  );
 
   const persistPendingWrites = useCallback(
     (writes: PendingNoteWrite[], reason: PendingSaveReason) => {
@@ -792,7 +832,7 @@ export default function PersonalNotesView({
   );
 
   const handleVoiceNoteTranscribed = useCallback(
-    (targetNoteId: number, text: string) => {
+    async (targetNoteId: number, text: string) => {
       const currentDraft = draftRef.current;
       if (currentDraft && currentDraft.noteId === targetNoteId) {
         const existing = currentDraft.content || "";
@@ -803,9 +843,9 @@ export default function PersonalNotesView({
       const fallbackNote = getNoteFromStore(targetNoteId);
       const existing = fallbackNote?.content || "";
       const nextContent = existing.trim() ? `${existing.trimEnd()}\n\n${text}` : text;
-      void window.electronAPI?.updateNote?.(targetNoteId, { content: nextContent });
+      await writePendingSave({ noteId: targetNoteId, updates: { content: nextContent } });
     },
-    [handleContentChange]
+    [handleContentChange, writePendingSave]
   );
 
   const voiceNoteRecorder = useVoiceNoteRecorder(handleVoiceNoteTranscribed);

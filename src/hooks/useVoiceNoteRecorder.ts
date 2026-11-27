@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { registerControlPanelReleaseGuard } from "../utils/controlPanelRelease";
 import { useTranslation } from "react-i18next";
 import { buildApiUrl } from "../config/constants";
 import { requestSelfHostedBatch } from "../helpers/selfHostedBatchRequest.js";
@@ -8,7 +9,9 @@ import { analyserRms } from "../utils/audioLevel";
 import { getBaseLanguageCode } from "../utils/languageSupport";
 import { useToast } from "../components/ui/useToast";
 
-export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: string) => void) {
+export function useVoiceNoteRecorder(
+  onTranscribed: (noteId: number, text: string) => void | Promise<void>
+) {
   const { t } = useTranslation();
   const { toast } = useToast();
   const [recordingNoteId, setRecordingNoteId] = useState<number | null>(null);
@@ -43,7 +46,9 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
 
   useEffect(() => {
     mountedRef.current = true;
+    const releaseGuard = registerControlPanelReleaseGuard(() => !busyRef.current);
     return () => {
+      releaseGuard();
       mountedRef.current = false;
       busyRef.current = false;
       startGenerationRef.current += 1;
@@ -113,7 +118,7 @@ export function useVoiceNoteRecorder(onTranscribed: (noteId: number, text: strin
 
       const text = typeof data?.text === "string" ? data.text.trim() : "";
       if (text) {
-        onTranscribedRef.current(noteId, text);
+        await onTranscribedRef.current(noteId, text);
       }
     },
     [t, toast]

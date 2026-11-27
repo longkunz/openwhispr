@@ -1,6 +1,7 @@
 import { refreshEnterpriseIdentityForUse } from "./enterpriseIdentityStore";
 import { getManagedTranscriptionResolution } from "../services/managedTranscription";
 import { create } from "zustand";
+import { registerControlPanelReleaseGuard } from "../utils/controlPanelRelease";
 import i18n from "../i18n";
 import { getSettings, selectResolvedMeetingTranscription } from "./settingsStore";
 import { useStreamingProvidersStore } from "./streamingProvidersStore";
@@ -499,6 +500,13 @@ let systemSource: MediaStreamAudioSourceNode | null = null;
 let systemProcessor: AudioWorkletNode | null = null;
 let systemStream: MediaStream | null = null;
 let isRecordingFlag = false;
+registerControlPanelReleaseGuard(
+  () =>
+    !isRecordingFlag &&
+    !isStartingFlag &&
+    !awaitingMeetingAdmission &&
+    !useMeetingRecordingStore.getState().isTranscribing
+);
 let isStartingFlag = false;
 let activeRecordingSessionId: string | null = null;
 const meetingRecordingStartCoordinator = createMeetingRecordingStartCoordinator();
