@@ -91,7 +91,7 @@ function runSystemTar(
 
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
-      killProcess(tarProcess, "SIGKILL");
+      killProcess(tarProcess, "SIGKILL", platform);
 
       // Normally close follows kill immediately. Do not let a broken process
       // implementation turn the safety timeout into another indefinite wait.

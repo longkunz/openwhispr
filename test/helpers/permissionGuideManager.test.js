@@ -101,6 +101,8 @@ function fixture({
       },
       clearTimeout: () => {},
       require: (name) => {
+        // The fixture runs as macOS even when the test runner is on Windows.
+        if (name === "path") return platform === "darwin" ? path.posix : path;
         if (name === "electron")
           return {
             BrowserWindow: Window,

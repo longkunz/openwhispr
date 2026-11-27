@@ -13,11 +13,11 @@ function handlers() {
     .replace(/\r\n/g, "\n");
   const connect = source.slice(
     source.indexOf("    const setupDictationCallbacks ="),
-    source.indexOf("    // Pre-warm: fetch tokens + connect WebSockets")
+    source.indexOf("    const streamingStartFailure =")
   );
   const lifecycle = source.slice(
     source.indexOf("    const streamingStartFailure ="),
-    source.indexOf('    handleProduct(\n      "start-dictation-preview"')
+    source.indexOf('    ipcMain.handle("dismiss-dictation-preview"')
   );
   assert.ok(connect.length > 0 && lifecycle.length > 0);
   const ipc = new EventEmitter();

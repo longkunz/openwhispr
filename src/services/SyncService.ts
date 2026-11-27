@@ -40,15 +40,11 @@ import {
   readTeamSpacesCapability,
   writeTeamSpacesCapability,
 } from "../lib/teamSpacesCapability";
-import { readIsSubscribed, subscribeIsSubscribed } from "../lib/subscriptionFlag";
+import { readIsSubscribed } from "../lib/subscriptionFlag";
 import { readNoteConflictIds, readNoteConflicts } from "../lib/noteConflictRegistry";
 import { serverClockOffsetMs, serverTimeIso } from "../lib/serverClock";
 import { pendingLeaderboardLeaveDeservesPriority } from "../lib/pendingLeaderboardLeave";
-import {
-  cloudBackupResumed,
-  effectiveLocalHistoryEnabled,
-  isCloudBackupAllowed,
-} from "../stores/policyRules";
+import { effectiveLocalHistoryEnabled, isCloudBackupAllowed } from "../stores/policyRules";
 import { usePolicyStore } from "../stores/policyStore";
 import { findDefaultFolder } from "../components/notes/shared";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -981,7 +977,6 @@ export class SyncService {
     at: number;
     writes: PlacementBackfillWrite[];
   } | null = null;
-  private autoSyncStarted = false;
   private dictionaryDirty = false;
   private snippetsDirty = false;
   private skillsDirty = false;
@@ -1005,7 +1000,6 @@ export class SyncService {
   private pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private teamSpacesRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private teamSpacesRetryAttempt = 0;
-  private openNoteSyncTimer: ReturnType<typeof setInterval> | null = null;
   // Set by any pass that actually moves team or shared content; drives the
   // ambient team-only backoff (see shouldRunAmbientTeamOnlyPass).
   private teamPassMovedWork = false;
@@ -1369,55 +1363,12 @@ export class SyncService {
     return iso ? Date.parse(iso) : 0;
   }
 
-  // Runs in every window for the whole session; the throttle and Web Lock
-  // dedupe across windows.
   startAutoSync(): void {
-    if (this.autoSyncStarted) return;
-    this.autoSyncStarted = true;
-
-    this.requestSyncAll("start");
-    window.addEventListener("focus", () => this.requestSyncAll("focus"));
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") {
-        this.requestSyncAll("focus");
-      }
-    });
-    window.addEventListener("online", () => this.requestSyncAll("online"));
-    // storage events fire only in the windows that didn't write the change,
-    // which is exactly where a first sync is still needed.
-    window.addEventListener("storage", (e) => {
-      if (e.key && CAN_SYNC_KEYS.includes(e.key)) {
-        this.requestSyncAll("start");
-      }
-    });
-    // Storage events only fire in other windows; the window that flips the
-    // subscription flag itself (post-checkout refetch, invite acceptance)
-    // kicks a pass through the reactive flag instead.
-    subscribeIsSubscribed(() => this.requestSyncAll("start"));
-    usePolicyStore.subscribe((policyState, previousPolicyState) => {
-      if (cloudBackupResumed(previousPolicyState, policyState)) this.requestSyncAll("start");
-    });
-    setInterval(() => this.requestSyncAll("interval"), AUTO_SYNC_INTERVAL_MS);
+    // Cloud account services are retired in this build.
   }
 
-  // Called by noteStore when a note opens or closes: while one is open, keep an
-  // extra fast pull running so remote edits land in seconds. Reuses
-  // requestSyncAll, so the shared throttle and cross-window lock still bound the
-  // real passes — this only adds a recurring trigger.
-  setNoteOpen(open: boolean): void {
-    if (!open) {
-      if (this.openNoteSyncTimer) {
-        clearInterval(this.openNoteSyncTimer);
-        this.openNoteSyncTimer = null;
-      }
-      return;
-    }
-    this.requestSyncAll("interval");
-    if (this.openNoteSyncTimer) return;
-    this.openNoteSyncTimer = setInterval(
-      () => this.requestSyncAll("interval"),
-      OPEN_NOTE_SYNC_INTERVAL_MS
-    );
+  setNoteOpen(_open: boolean): void {
+    // Opening a local note must not register a cloud polling timer.
   }
 
   private scheduleTeamSpacesRetry(): void {
@@ -1599,9 +1550,7 @@ export class SyncService {
     await this.syncLibraryNow("snippets");
   }
 
-  private async syncLibraryNow(
-    kind: "snippets"
-  ): Promise<DictionarySyncResult> {
+  private async syncLibraryNow(kind: "snippets"): Promise<DictionarySyncResult> {
     if (!this.canSync()) return "skipped";
     this[`${kind}Dirty`] = true;
     if (this.syncing) return "skipped";
@@ -1633,11 +1582,7 @@ export class SyncService {
   }
 
   private async syncDirtyLibraries(): Promise<boolean> {
-    while (
-      this.passIsCurrent() &&
-      this.canSync() &&
-      this.snippetsDirty
-    ) {
+    while (this.passIsCurrent() && this.canSync() && this.snippetsDirty) {
       this.snippetsDirty = false;
       await this.syncSnippets();
     }

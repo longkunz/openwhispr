@@ -5,8 +5,6 @@ const seed = require("../../src/models/modelRegistryData.json");
 test("one atomic update reaches CJS helpers, ESM readers and derived model lists", async () => {
   const store = require("../../src/models/registryData.js");
   const esm = await import("../../src/models/registryData.js");
-  const { listLocalTranscriptionModels } = require("../../src/helpers/localTranscriptionModels");
-  const { getASRModelOrganization } = require("../../src/helpers/localASROrganization.ts");
   const models = require("../../src/models/ModelRegistry.ts");
   const routing = require("../../src/helpers/dictationStreamingRouting.js");
   const old = store.getRegistrySnapshot();
@@ -51,16 +49,6 @@ test("one atomic update reaches CJS helpers, ESM readers and derived model lists
     assert.notEqual(
       store.getRegistryData().cloudProviders.find((p) => p.id === "tinfoil").models[0].id,
       "fresh-tinfoil"
-    );
-    assert.equal(getASRModelOrganization("registry-asr"), "oruk");
-    const local = listLocalTranscriptionModels({
-      whisperManager: { isModelDownloaded: () => false },
-      parakeetManager: { isModelDownloaded: () => false },
-      env: {},
-    });
-    assert.deepEqual(
-      local.find((m) => m.model === "registry-test"),
-      { provider: "whisper", model: "registry-test", downloaded: false, default: false }
     );
     assert.ok(routing.REALTIME_MODELS.has("registry-realtime"));
     assert.equal(

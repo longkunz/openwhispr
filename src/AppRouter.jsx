@@ -3,19 +3,15 @@ import { useTranslation } from "react-i18next";
 import { useTheme } from "./hooks/useTheme";
 import { usePolicyStore } from "./stores/policyStore";
 import { Button } from "./components/ui/button";
-import { isAgentWindow, isControlPanelWindow } from "./utils/windowContext.ts";
+import { isControlPanelWindow } from "./utils/windowContext.ts";
 
 const ControlPanelApp = React.lazy(() => import("./ControlPanelApp.jsx"));
 const DictationApp = React.lazy(() => import("./DictationApp.jsx"));
-const MeetingNotificationOverlay = React.lazy(
-  () => import("./components/MeetingNotificationOverlay.tsx")
-);
 const PermissionGuideOverlay = React.lazy(() =>
   import("./components/onboarding/PermissionGuideOverlay").then((module) => ({
     default: module.PermissionGuideOverlay,
   }))
 );
-const AgentWindow = React.lazy(() => import("./components/agent/AgentWindow.tsx"));
 
 export default function AppRouter() {
   useTheme();
@@ -65,24 +61,6 @@ export default function AppRouter() {
         <PermissionGuideOverlay />
       </Suspense>
     );
-
-  if (params.includes("meeting-notification=true")) {
-    return (
-      <Suspense fallback={null}>
-        <MeetingNotificationOverlay />
-      </Suspense>
-    );
-  }
-
-  // Before the normal app routes: they report startup state, which only the dictation
-  // window and the control panel may do.
-  if (isAgentWindow()) {
-    return (
-      <Suspense fallback={null}>
-        <AgentWindow />
-      </Suspense>
-    );
-  }
 
   return (
     <Suspense fallback={<LoadingFallback />}>

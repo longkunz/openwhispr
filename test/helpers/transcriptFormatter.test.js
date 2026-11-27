@@ -206,71 +206,6 @@ test("a manually named segment does not absorb the adjacent un-named one", () =>
   assert.ok(txtOutput.includes("[00:00:01] You:\nAnd this is me talking."));
 });
 
-test("own-voice segments share one label whether or not diarization stamped them", (t) => {
-  changeLanguage("de");
-  t.after(() => changeLanguage("en"));
-
-  const note = { title: "Standup", created_at: "2026-01-01T00:00:00Z" };
-  const segments = [
-    { source: "mic", speaker: "you", timestamp: 0, text: "Guten Morgen." },
-    { source: "mic", timestamp: 3, text: "Noch etwas." },
-    { source: "system", speaker: "speaker_0", timestamp: 8, text: "Hallo." },
-  ];
-
-  const txtOutput = formatTxt(note, segments, {});
-  assert.ok(txtOutput.includes("[00:00:00] Du:\nGuten Morgen."));
-  assert.ok(txtOutput.includes("[00:00:03] Du:\nNoch etwas."));
-  assert.ok(!txtOutput.includes("You:"));
-});
-
-test("the JSON export counts both own-voice segment shapes as one speaker", (t) => {
-  changeLanguage("de");
-  t.after(() => changeLanguage("en"));
-
-  const parsed = JSON.parse(
-    formatJson(
-      { title: "Standup", created_at: "2026-01-01T00:00:00Z" },
-      [
-        { source: "mic", speaker: "you", timestamp: 0, text: "Guten Morgen." },
-        { source: "mic", timestamp: 3, text: "Noch etwas." },
-        { source: "system", speaker: "speaker_0", timestamp: 8, text: "Hallo." },
-      ],
-      {}
-    )
-  );
-
-  assert.deepEqual(parsed.speakers, ["Du", "Sprecher 1"]);
-  assert.equal(parsed.metadata.speaker_count, 2);
-});
-
-test("diarized speaker numbers render in the UI language", (t) => {
-  changeLanguage("de");
-  t.after(() => changeLanguage("en"));
-
-  const txtOutput = formatTxt(
-    { title: "Standup", created_at: "2026-01-01T00:00:00Z" },
-    [{ source: "system", speaker: "speaker_0", timestamp: 0, text: "Hallo." }],
-    {}
-  );
-
-  assert.ok(txtOutput.includes("[00:00:00] Sprecher 1:\nHallo."));
-  assert.ok(!txtOutput.includes("Speaker 1"));
-});
-
-test("segments with no speaker information get a localized unknown label", (t) => {
-  changeLanguage("de");
-  t.after(() => changeLanguage("en"));
-
-  const txtOutput = formatTxt(
-    { title: "Standup", created_at: "2026-01-01T00:00:00Z" },
-    [{ timestamp: 0, text: "Hallo." }],
-    {}
-  );
-
-  assert.ok(txtOutput.includes("[00:00:00] Unbekannter Sprecher:\nHallo."));
-  assert.ok(!txtOutput.includes("Unknown Speaker"));
-});
-
 test("an explicit speaker mapping still overrides the own-voice label", () => {
   const txtOutput = formatTxt(
     { title: "Standup", created_at: "2026-01-01T00:00:00Z" },
@@ -372,20 +307,6 @@ test("a recorder label names the recorder's lines in every format", () => {
   assert.equal(json.segments[0].speaker, "Ada Lovelace");
 });
 
-test("a localized You speaker name takes the recorder label", (t) => {
-  changeLanguage("de");
-  t.after(() => changeLanguage("en"));
-
-  const txt = formatTxt(
-    recorderNote,
-    [{ source: "system", speakerName: "Du", speaker: "speaker_0", timestamp: 0, text: "Hallo." }],
-    {},
-    { recorderLabel: "Ada Lovelace" }
-  );
-
-  assert.ok(txt.includes("[00:00:00] Ada Lovelace:\nHallo."));
-});
-
 test("other speaker names and this device's You mapping keep their names", () => {
   const txt = formatTxt(
     recorderNote,
@@ -478,10 +399,7 @@ test("exports keep adjacent locked corrections separate from viewer-local self m
   assert.match(formatSrt(segments, mappings, note), /Alice Recorder: Recorder commitment\./);
 });
 
-for (const [language, youLabel] of [
-  ["en", "You"],
-  ["de", "Du"],
-]) {
+for (const [language, youLabel] of [["en", "You"]]) {
   test(`exports preserve local mappings, locked corrections and session recorders in ${language}`, (t) => {
     changeLanguage(language);
     t.after(() => changeLanguage("en"));

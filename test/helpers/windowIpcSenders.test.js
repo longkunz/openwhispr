@@ -156,6 +156,75 @@ test.after(() => {
   Module._load = originalLoad;
 });
 
+test("local startup and version reads work without the removed updater or GPU services", async () => {
+  const active = [];
+  installWindowManager({ setOnboardingActive: (value) => active.push(value) });
+  await handlers.get("onboarding-set-active")({}, false);
+  assert.deepEqual(active, [false]);
+  assert.equal(await handlers.get("get-app-version")(), "0.0.0");
+});
+
+test("retired feature handlers and preload entry points are absent", () => {
+  const vm = require("node:vm");
+  const fs = require("node:fs");
+  let api;
+  vm.runInNewContext(fs.readFileSync(require.resolve("../../preload"), "utf8"), {
+    require: () => ({
+      contextBridge: {
+        exposeInMainWorld: (_name, value) => {
+          api = value;
+        },
+      },
+      ipcRenderer: {},
+      webUtils: {},
+    }),
+  });
+  for (const [channel, method] of [
+    ["open-agent-window", "openAgentWindow"],
+    ["cloud-reason", "cloudReason"],
+    ["auth-get-token", "authGetToken"],
+    ["check-for-updates", "checkForUpdates"],
+    ["db-set-snippets", "setSnippets"],
+    ["transcribe-audio-file", "transcribeAudioFile"],
+  ]) {
+    assert.equal(handlers.has(channel), false, channel);
+    assert.equal(method in api, false, method);
+  }
+  for (const method of [
+    "getAnalyticsSummary",
+    "recordAnalyticsEvent",
+    "saveNote",
+    "dictationRealtimeStart",
+  ])
+    assert.equal(typeof api[method], "function", method);
+});
+
+test("updating participants on an existing local note needs no retired speaker engine", async () => {
+  const note = { id: 7, participants: '[{"name":"Speaker"}]' };
+  target.databaseManager = { updateNote: () => ({ success: true, note }) };
+  target.notifyVectorChanges = () => {};
+  target._asyncMirrorWrite = () => {};
+  const result = await handlers.get("db-update-note")({}, 7, { participants: note.participants });
+  assert.deepEqual(result, { success: true, note });
+});
+
+test("local Insights writes and reads remain available without cloud analytics", async () => {
+  const summary = { totalWords: 12, totalDictations: 1 };
+  const writes = [];
+  target.databaseManager = {
+    recordAnalyticsEvent: (input) => {
+      writes.push(input);
+      return { success: true };
+    },
+    getAnalyticsSummary: () => summary,
+  };
+  target._ensureAnalyticsHistoryBackfilled = async () => {};
+  const input = { eventId: "local-dictation", wordCount: 12 };
+  assert.deepEqual(await handlers.get("analytics-record-event")({}, input), { success: true });
+  assert.deepEqual(writes, [input]);
+  assert.equal(await handlers.get("analytics-get-summary")(), summary);
+});
+
 test("only the main renderer can change its window's input region", async () => {
   const { stub, mainContents } = makeWindowManagerStub();
   const regions = [];
@@ -174,6 +243,22 @@ test("only the main renderer can change its window's input region", async () => 
   assert.deepEqual(regions, [region]);
 });
 
+test("startup preferences can read old Sherpa and Whisper selections without loading an engine", async () => {
+  const saved = [];
+  target._syncStartupEnv = (set, clear) => saved.push({ set, clear });
+  target._hasActiveAccountScope = () => false;
+  const sync = handlers.get("sync-startup-preferences");
+  for (const provider of ["nvidia", "cohere", "whisper"]) {
+    await sync(
+      {},
+      { useLocalWhisper: true, localTranscriptionProvider: provider, model: "saved-model" }
+    );
+  }
+  assert.equal(saved[0].set.PARAKEET_MODEL, "saved-model");
+  assert.equal(saved[1].set.PARAKEET_MODEL, "saved-model");
+  assert.equal(saved[2].set.LOCAL_WHISPER_MODEL, "saved-model");
+});
+
 test("lifecycle reports are accepted only from the dictation renderer", () => {
   const { stub, calls, mainContents } = makeWindowManagerStub();
   installWindowManager(stub);
@@ -187,48 +272,6 @@ test("lifecycle reports are accepted only from the dictation renderer", () => {
     ["preparing", "take-1", false],
     ["recording", "take-1", true],
   ]);
-});
-
-test("only the dictation window opens the agent window or hands it a wake-word command", async () => {
-  const { stub, calls: allCalls, mainContents } = makeWindowManagerStub();
-  const calls = allCalls.agent;
-  installWindowManager(stub);
-  const stranger = frameOf(makeContents());
-  const subframe = { sender: mainContents, senderFrame: {} };
-  const command = { text: "what's next", attachment: null, selectedContext: null };
-  target.databaseManager = { accountChangedSince: () => false };
-
-  assert.equal(await handlers.get("open-agent-window")(stranger), false);
-  assert.equal(await handlers.get("open-agent-window")(subframe), false);
-  assert.equal(await handlers.get("agent-window-submit-command")(stranger, command), false);
-  assert.deepEqual(calls, []);
-
-  assert.equal(await handlers.get("open-agent-window")(frameOf(mainContents)), true);
-  assert.equal(
-    await handlers.get("agent-window-submit-command")(frameOf(mainContents), command),
-    true
-  );
-  assert.deepEqual(calls, [["open"], ["command", command]]);
-});
-
-test("a wake-word command spoken under a replaced account never reaches the agent window", async () => {
-  const { stub, calls: allCalls, mainContents } = makeWindowManagerStub();
-  installWindowManager(stub);
-  const checked = [];
-  target.databaseManager = {
-    accountChangedSince: (spokenAt) => {
-      checked.push(spokenAt);
-      return true;
-    },
-  };
-  const command = { text: "what's next", spokenAt: "2026-11-10T10:00:00.000Z" };
-
-  assert.equal(
-    await handlers.get("agent-window-submit-command")(frameOf(mainContents), command),
-    false
-  );
-  assert.deepEqual(checked, [command.spokenAt]);
-  assert.deepEqual(allCalls.agent, []);
 });
 
 test("Esc reaches the window that registered it, and only that window takes it back", async () => {
@@ -291,93 +334,4 @@ test("a window that reloads, crashes or closes while it holds Esc gives it back"
   await handlers.get("register-cancel-hotkey")(frameOf(second), "Escape");
   first.emit("destroyed");
   assert.deepEqual(calls, []);
-});
-
-for (const [navigation, id] of [
-  ["blocked", 502],
-  ["failed", 503],
-]) {
-  test(`a ${navigation} main-frame navigation retains conversation ownership`, async () => {
-    target.databaseManager = {
-      activeAccountId: null,
-      getAgentConversation: (id) => ({ id, messages: [] }),
-    };
-    const first = makeContents();
-    const peer = makeContents();
-    const claim = handlers.get("claim-agent-conversation");
-    assert.equal((await claim(frameOf(first), id, "first")).owned, true);
-    first.emit("did-start-navigation", {}, "file:///missing", false, true);
-    if (navigation === "failed") {
-      first.emit("did-fail-load", {}, -6, "ERR_FILE_NOT_FOUND", "file:///missing", true);
-    }
-    assert.equal(
-      (await claim(frameOf(peer), id, "peer")).owned,
-      false,
-      "a navigation that never committed leaves the current owner alive"
-    );
-    assert.equal(
-      (await handlers.get("db-get-agent-conversation")(frameOf(peer), id)).has_active_turn,
-      true
-    );
-    first.emit("destroyed");
-  });
-}
-
-test("conversation recovery has one owner and releases on renderer loss or committed navigation", async () => {
-  target.databaseManager = {
-    activeAccountId: null,
-    getAgentConversation: (id) => ({ id, messages: [] }),
-  };
-  const first = makeContents();
-  const peer = makeContents();
-  const claim = handlers.get("claim-agent-conversation");
-  const release = handlers.get("release-agent-conversation");
-  assert.equal(typeof claim, "function");
-  assert.equal((await claim(frameOf(first), 501, "first")).owned, true);
-  assert.equal(
-    (await handlers.get("db-get-agent-conversation")(frameOf(peer), 501)).has_active_turn,
-    true
-  );
-  assert.equal((await claim(frameOf(peer), 501, "peer")).owned, false);
-  await release(frameOf(peer), 501, "first");
-  assert.equal(
-    (await claim(frameOf(peer), 501, "peer")).owned,
-    false,
-    "another renderer cannot release it"
-  );
-  first.emit("did-start-navigation", {}, "about:blank", false, false);
-  assert.equal(
-    (await claim(frameOf(peer), 501, "peer")).owned,
-    false,
-    "subframes cannot release it"
-  );
-  first.emit("did-frame-navigate", {}, "about:blank", 200, "OK", false, 1, 2);
-  first.emit("did-navigate-in-page", {}, "file:///app#note", true);
-  assert.equal(
-    (await claim(frameOf(peer), 501, "peer")).owned,
-    false,
-    "subframe and same-document commits keep the owner"
-  );
-  first.emit("did-navigate", {}, "file:///app", 200, "OK");
-  assert.equal(
-    (await claim(frameOf(peer), 501, "peer")).owned,
-    true,
-    "reload permits interrupted recovery"
-  );
-  await release(frameOf(first), 501, "first");
-  first.emit("did-navigate", {}, "file:///app", 200, "OK");
-  assert.equal(
-    (await claim(frameOf(first), 501, "first")).owned,
-    false,
-    "the previous owner cannot release the peer's claim"
-  );
-  peer.emit("render-process-gone", {}, { reason: "crashed" });
-  assert.equal((await claim(frameOf(first), 501, "after-crash")).owned, true);
-  first.emit("destroyed");
-  assert.equal((await claim(frameOf(peer), 501, "after-close")).owned, true);
-  await release(frameOf(peer), 501, "after-close");
-  assert.equal(
-    (await handlers.get("db-get-agent-conversation")(frameOf(peer), 501)).has_active_turn,
-    false
-  );
 });

@@ -226,6 +226,7 @@ export function resetOnboardingProgress(storage: OnboardingStorage): void {
   storage.removeItem("authenticationSkipped");
   storage.removeItem("skipAuth");
   storage.removeItem("localSetupPending");
+  storage.removeItem("pendingLocalModelSelectionsV1");
   // A restart is not the sign-in that marker announces.
   storage.removeItem(SIGN_IN_PROMPTED_AT_KEY);
   // AppRouter uses this marker to distinguish an explicit restart from a

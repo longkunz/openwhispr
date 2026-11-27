@@ -79,3 +79,47 @@ test("Cancel in AudioManager closes the self-hosted HTTP response through preloa
   await closed.promise;
   assert.equal(manager._activeTranscriptionAbortController, null);
 });
+
+test("batch processing uses its captured server instead of a stale streaming session", async (t) => {
+  const loaded = await loadAudioManager(t, {
+    cachePrefix: "openwhispr-batch-snapshot-",
+    settingsKey: "__batchSnapshotSettings",
+    settings: {
+      transcriptionMode: "self-hosted",
+      remoteTranscriptionUrl: "https://changed.example/v1",
+      remoteTranscriptionModel: "changed",
+    },
+  });
+  const requests = [];
+  loaded.window.electronAPI.proxySelfHostedTranscription = async (data) => {
+    requests.push(data);
+    return { ok: true, bodyText: '{"text":"Xin chào"}' };
+  };
+  const completed = [];
+  const errors = [];
+  const manager = loaded.createManager({
+    isProcessing: true,
+    _batchSelfHostedSettings: {
+      remoteTranscriptionUrl: "https://original.example/v1",
+      remoteTranscriptionModel: "vietasr",
+      preferredLanguage: "vi",
+      headers: [{ name: "X-API-Key", value: "original" }],
+    },
+    _activeVietAsrSettings: {
+      remoteTranscriptionUrl: "https://stale-stream.example/v1",
+    },
+    processTranscription: async (text) => text,
+    onTranscriptionComplete: (result) => completed.push(result),
+    onError: (error) => errors.push(error),
+    onStateChange() {},
+  });
+  await manager.processAudio(new Blob(["audio"], { type: "audio/webm" }));
+  assert.deepEqual(errors, []);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].endpoint, "https://original.example/v1/audio/transcriptions");
+  assert.equal(requests[0].model, "vietasr");
+  assert.equal(requests[0].headers["x-api-key"], "original");
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].text, "Xin chào");
+  assert.equal(completed[0].source, "self-hosted");
+});

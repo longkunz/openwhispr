@@ -1,29 +1,14 @@
-import CreatorLinkField from "./CreatorLinkField";
-import { EnterpriseAudioSettings } from "./settings/EnterpriseAudioSettings";
-import { useRegistryVersion } from "../hooks/useRegistryVersion";
-import React, { useState, useCallback, useEffect, useRef } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import { BIDI_VALUE_TOKEN, BidiInterpolatedText } from "./ui/BidiInterpolatedText";
-import { Badge } from "./ui/badge";
 import {
-  RefreshCw,
-  Download,
   Mic,
   Shield,
   FolderOpen,
-  LogOut,
-  UserCircle,
   Sun,
   Moon,
   Monitor,
-  Cloud,
-  Key,
-  Cpu,
-  Network,
-  ShieldCheck,
-  Sparkles,
   AlertTriangle,
   Loader2,
   CircleCheck,
@@ -31,29 +16,15 @@ import {
   RotateCw,
   BookOpen,
   Copy,
-  Trash2,
   Info,
-  MessageSquare,
   FileAudio,
-  Wand2,
   Upload,
-  Languages,
 } from "./icons";
-import { useAuth } from "../hooks/useAuth";
-import { resetForAccountChange as resetChatForAccountChange } from "../stores/chatTurnStore";
-import { AUTH_URL, signOut } from "../lib/auth";
-import { deleteAccount } from "../lib/accountDeletionRequest";
-import { executeAccountDeletion } from "../lib/accountDeletionFlow";
-import { getValidatedAuthGeneration } from "../lib/authRequestContext";
-import { checkoutErrorDescriptionKey } from "../lib/billingPortalError";
-import { useBillingPortal } from "../hooks/useBillingPortal";
-import { usePersonalPlanBilling } from "../hooks/usePersonalPlanBilling";
 import MicPermissionWarning from "./ui/MicPermissionWarning";
 import MicrophoneSettings from "./ui/MicrophoneSettings";
 import PermissionCard from "./ui/PermissionCard";
 import PasteToolsInfo from "./ui/PasteToolsInfo";
 import NixOsPasteInfo from "./ui/NixOsPasteInfo";
-import TranscriptionModelPicker from "./TranscriptionModelPicker";
 import SelfHostedPanel from "./SelfHostedPanel";
 import {
   ConfirmDialog,
@@ -63,14 +34,10 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
 } from "./ui/dialog";
 import { Alert, AlertTitle, AlertDescription } from "./ui/alert";
 import { useSettings } from "../hooks/useSettings";
 import { useDialogs } from "../hooks/useDialogs";
-import { useSignOut } from "../hooks/useSignOut";
-import { useInsightsSyncOptIn } from "../hooks/useInsightsSyncOptIn";
-import { useLeaderboardParticipation } from "../hooks/useLeaderboardParticipation";
 import { clearInsightsCache } from "../lib/insightsCache";
 import { usePermissions } from "../hooks/usePermissions";
 import { useSystemAudioPermission } from "../hooks/useSystemAudioPermission";
@@ -82,106 +49,36 @@ import { useHotkeyRegistration } from "../hooks/useHotkeyRegistration";
 import { useHotkeyModeInfo } from "../hooks/useHotkeyModeInfo";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { validateHotkeyForSlot } from "../utils/hotkeyValidation";
-import { getPlatform, getCachedPlatform } from "../utils/platform";
+import { getCachedPlatform } from "../utils/platform";
 import { formatHotkeyLabel } from "../utils/hotkeys";
 import {
   getLinuxPasteInstallCommands,
   needsLinuxPasteToolGuidance,
 } from "../utils/linuxPasteTools";
 import { ActivationModeSelector } from "./ui/ActivationModeSelector";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import LinuxPttSetupInfo from "./ui/LinuxPttSetupInfo";
 import { Toggle } from "./ui/toggle";
 import DeveloperSection from "./DeveloperSection";
-import InferenceConfigEditor from "./settings/InferenceConfigEditor";
 import { MeetingTranscriptionPanel } from "./settings/MeetingSettings";
 import { UploadTranscriptionPanel } from "./settings/UploadSettings";
 import LanguageSelector from "./ui/LanguageSelector";
-import { Skeleton } from "./ui/skeleton";
 import { useToast } from "./ui/useToast";
 import { useTheme } from "../hooks/useTheme";
-import type {
-  ChineseScriptPreference,
-  GpuDevice,
-  LocalTranscriptionProvider,
-  InferenceMode,
-} from "../types/electron";
+import type { LocalTranscriptionProvider, InferenceMode } from "../types/electron";
 import logger from "../utils/logger";
-import {
-  SettingsRow,
-  SettingsPanel,
-  SettingsPanelRow,
-  InferenceModeSelector,
-} from "./ui/SettingsSection";
-import type { InferenceModeOption } from "./ui/SettingsSection";
+import { SettingsRow, SettingsPanel, SettingsPanelRow } from "./ui/SettingsSection";
 import { TabPanel } from "./ui/TabPanel";
-import { useSettingsLayout } from "./ui/useSettingsLayout";
-import { useUsage } from "../hooks/useUsage";
-import { cn } from "./lib/utils";
-import { GRADIENT_CIRCLE } from "./ui/gradientCircle";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
-import {
-  startMigration,
-  useMigration,
-  loadFolders,
-  initializeNotesTree,
-} from "../stores/noteStore.js";
-import { syncService } from "../services/SyncService.js";
 import { formatBytes } from "../utils/formatBytes";
+import { useSettingsStore } from "../stores/settingsStore";
 import {
-  TRANSCRIPTION_ENTERPRISE_POLICY_PROVIDER_IDS,
-  TRANSCRIPTION_POLICY_PROVIDER_IDS,
-  useSettingsStore,
-  type HotkeyRegistrationResult,
-} from "../stores/settingsStore";
-import { useWorkspaceStore } from "../stores/workspaceStore";
-import {
-  canChangeCloudBackupPreference,
   effectiveAudioRetentionDays,
   effectiveLocalHistoryEnabled,
-  isAgentAllowed,
-  isCloudBackupAllowed,
-  isEnterpriseTranscriptionOfferable,
   lockedLocalHistoryValue,
   maxAudioRetentionDays,
 } from "../stores/policyRules";
-import { usePolicyModeOptions, usePolicySnapshot } from "../hooks/usePolicy";
-import { usePolicyStore } from "../stores/policyStore";
-import { requestSignIn } from "../utils/requestSignIn";
+import { usePolicySnapshot } from "../hooks/usePolicy";
 import { canManageSystemAudioInApp } from "../utils/systemAudioAccess";
-import WorkspaceGeneralSection from "./settings/WorkspaceGeneralSection";
-import WorkspacePeopleSection from "./settings/WorkspacePeopleSection";
-import WorkspaceTeamspacesSection from "./settings/WorkspaceTeamspacesSection";
-import WorkspaceDeveloperSection from "./settings/WorkspaceDeveloperSection";
 import type { PlansBillingRequest, SettingsSectionType } from "../lib/settingsNav";
-import { resolveBillingView, settleBillingRequest } from "../lib/plansBillingView";
-import {
-  businessDowngradeAction,
-  businessTileAction,
-  enterpriseManageAction,
-  enterpriseTileAction,
-  coveringWorkspaces,
-  entitledWorkspacePlans,
-} from "../lib/workspaceBilling";
-import { showsCreatorLink, type PersonalAction } from "../lib/personalPlanState";
-import { PersonalPlanView } from "./settings/billing/PersonalPlanView";
-import { formatBillingDate } from "./settings/billing/billingFormat";
-import { PlansGrid, type ProCardAction } from "./settings/billing/PlansGrid";
-import {
-  billingIntervalChoice,
-  personalBusyAction,
-  personalProCardKind,
-  runBusinessTileAction,
-  runEnterpriseTileAction,
-  runPersonalAction,
-  type PersonalPlanHandlers,
-} from "./settings/billing/personalGridHandlers";
-import { PlansBillingPicker } from "./settings/billing/PlansBillingPicker";
-import { WorkspaceBillingView } from "./settings/billing/WorkspaceBillingView";
-import CreateWorkspaceDialog from "./CreateWorkspaceDialog";
-import { formatAmount } from "../utils/formatAmount";
-import { enterpriseProviderName, getTranscriptionProvider } from "../models/ModelRegistry";
-import { useManagedScopeResolution } from "../stores/enterpriseIdentityStore";
 
 export type { SettingsSectionType };
 
@@ -203,8 +100,6 @@ const RETENTION_DAY_OPTIONS = [1, 7, 14, 30, 60, 90];
 
 const RETENTION_SELECT_CLASS =
   "h-7 rounded border border-border/70 bg-surface-1/80 px-2.5 text-xs font-medium text-foreground shadow-sm hover:border-border-hover hover:bg-surface-2/70 focus:outline-none focus:ring-2 focus:ring-ring/30 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 transition-colors duration-200";
-
-const noop = () => {};
 
 function SectionHeader({
   title,
@@ -295,13 +190,6 @@ export function TranscriptionSection({
   toast,
 }: TranscriptionSectionProps) {
   const { t } = useTranslation();
-  const policySnapshot = usePolicySnapshot();
-  const enterpriseTranscriptionSetupMode = useSettingsStore(
-    (s) => s.enterpriseTranscriptionSetupMode
-  );
-  const setEnterpriseTranscriptionSetupMode = useSettingsStore(
-    (s) => s.setEnterpriseTranscriptionSetupMode
-  );
   const selfHostedHeaders = useSettingsStore((s) => s.selfHostedSttHeaders.dictation);
   const vietAsrStreamingEnabled = useSettingsStore((s) => s.vietAsrStreamingEnabled);
   const setVietAsrStreamingEnabled = useSettingsStore((s) => s.setVietAsrStreamingEnabled);
@@ -388,66 +276,6 @@ function useSubTab<T extends string>(storageKey: string, options: readonly T[], 
   return [safeTab, setTab] as const;
 }
 
-function VADLabelWithInfo({ label, description }: { label: string; description: string }) {
-  return (
-    <div className="inline-flex items-center gap-1.5 text-xs font-medium text-foreground">
-      <span>{label}</span>
-      <Popover>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="inline-flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground transition-colors"
-            aria-label={label}
-          >
-            <Info className="h-3.5 w-3.5" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent side="top" align="start" className="max-w-sm p-3">
-          <p className="text-xs leading-relaxed text-muted-foreground">{description}</p>
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
-
-// "Gabriel Stein" → "GS"; single names fall back to their first letter.
-function nameInitials(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  const first = parts[0]?.[0] ?? "";
-  const last = parts.length > 1 ? (parts[parts.length - 1][0] ?? "") : "";
-  return (first + last).toUpperCase();
-}
-
-export function AccountAvatar({ image, name }: { image?: string | null; name: string }) {
-  // Same stale-URL fallback as MemberAvatar: OAuth-hosted images expire, and a
-  // bare <img> would render the broken-image glyph instead of the initials.
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const initials = nameInitials(name);
-  return (
-    <div
-      className={cn(
-        "w-10 h-10 rounded-full flex items-center justify-center shrink-0 overflow-hidden",
-        GRADIENT_CIRCLE
-      )}
-    >
-      {image && image !== failedSrc ? (
-        <img
-          src={image}
-          alt={name}
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          onError={() => setFailedSrc(image)}
-          className="w-10 h-10 rounded-full object-cover"
-        />
-      ) : initials ? (
-        <span className="text-[13px] font-semibold leading-none select-none">{initials}</span>
-      ) : (
-        <UserCircle className="w-5 h-5" />
-      )}
-    </div>
-  );
-}
-
 function SpeechToTextTabs({
   initialTab,
   renderDictation,
@@ -495,70 +323,6 @@ function SpeechToTextTabs({
   );
 }
 
-function GpuDeviceSelector({ purpose }: { purpose: "transcription" | "intelligence" }) {
-  const { t } = useTranslation();
-  const [gpus, setGpus] = useState<GpuDevice[]>([]);
-  const [selectedUuid, setSelectedUuid] = useState("");
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    Promise.all([
-      window.electronAPI?.listGpus?.() ?? Promise.resolve([]),
-      window.electronAPI?.getGpuDeviceIndex?.(purpose) ?? Promise.resolve(""),
-    ])
-      .then(([gpuList, savedUuid]) => {
-        setGpus(gpuList);
-        setSelectedUuid(savedUuid || gpuList[0]?.uuid || "");
-        setLoaded(true);
-      })
-      .catch(() => setLoaded(true));
-  }, [purpose]);
-
-  if (!loaded || gpus.length < 2) return null;
-
-  return (
-    <div className="border-t border-border/70 pt-4 mt-4">
-      <SectionHeader
-        title={t(`settingsPage.${purpose}.gpuDevice.title`)}
-        description={t(`settingsPage.${purpose}.gpuDevice.description`)}
-      />
-      <SettingsPanel>
-        <SettingsPanelRow>
-          <div className="relative w-full">
-            <select
-              value={selectedUuid}
-              onChange={async (e) => {
-                const uuid = e.target.value;
-                setSelectedUuid(uuid);
-                await window.electronAPI?.setGpuDeviceIndex?.(purpose, uuid);
-              }}
-              className="w-full appearance-none rounded-md border border-border bg-background px-3 pe-10 py-2 text-sm"
-            >
-              {gpus.map((gpu) => (
-                <option key={gpu.uuid} value={gpu.uuid}>
-                  GPU {gpu.index}: {gpu.name} ({Math.round(gpu.vramMb / 1024)}GB)
-                </option>
-              ))}
-            </select>
-            <svg
-              className="pointer-events-none absolute end-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="m6 9 6 6 6-6" />
-            </svg>
-          </div>
-        </SettingsPanelRow>
-      </SettingsPanel>
-    </div>
-  );
-}
-
 export default function SettingsPage({
   activeSection = "general",
   onNavigateToSection,
@@ -567,8 +331,6 @@ export default function SettingsPage({
   billingRequest = PERSONAL_BILLING_REQUEST,
   onBillingRequestChange,
 }: SettingsPageProps) {
-  const registryVersion = useRegistryVersion();
-  const { isCompact } = useSettingsLayout();
   const {
     confirmDialog,
     alertDialog,
@@ -687,21 +449,15 @@ export default function SettingsPage({
     whisperVadSamplesOverlap,
     setWhisperVadSamplesOverlap,
   } = useSettings();
-
-  const meetingProcessDetection = useSettingsStore((state) => state.meetingProcessDetection);
   const voiceAgentKey = useSettingsStore((s) => s.voiceAgentKey);
-  const setVoiceAgentKey = useSettingsStore((s) => s.setVoiceAgentKey);
   const translationKey = useSettingsStore((s) => s.translationKey);
-  const setTranslationKey = useSettingsStore((s) => s.setTranslationKey);
 
   const settingsPolicyState = usePolicySnapshot();
-  const agentAllowedByPolicy = isAgentAllowed(settingsPolicyState);
   const historyLockedByPolicy = lockedLocalHistoryValue(settingsPolicyState) !== null;
   const effectiveDataRetentionEnabled = effectiveLocalHistoryEnabled(
     settingsPolicyState,
     dataRetentionEnabled
   );
-  const cloudBackupPolicyAllowed = isCloudBackupAllowed(settingsPolicyState);
   const audioRetentionCap = maxAudioRetentionDays(settingsPolicyState);
   const enforcedAudioRetentionDays = effectiveAudioRetentionDays(
     settingsPolicyState,
@@ -710,24 +466,12 @@ export default function SettingsPage({
 
   const { t, i18n } = useTranslation();
   const { toast } = useToast();
-
-  const [currentVersion, setCurrentVersion] = useState<string>("");
   const [isRemovingModels, setIsRemovingModels] = useState(false);
   const [cachePathHint, setCachePathHint] = useState(
     typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
       ? "%USERPROFILE%\\.cache\\openwhispr"
       : "~/.cache/openwhispr"
   );
-  useEffect(() => {
-    window.electronAPI
-      ?.getModelCacheRoot?.()
-      .then((root) => {
-        if (root) setCachePathHint(root);
-      })
-      .catch(() => {});
-  }, []);
-
-  const migration = useMigration();
 
   const permissionsHook = usePermissions(showAlertDialog);
   const systemAudio = useSystemAudioPermission();
@@ -802,76 +546,6 @@ export default function SettingsPage({
   }, [refreshYdotoolStatus]);
 
   const { theme, setTheme } = useTheme();
-  const usage = useUsage();
-  const billingWorkspaces = useWorkspaceStore((s) => s.workspaces);
-  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const billingWorkspacesLoaded = useWorkspaceStore((s) => s.loaded);
-  const billingWorkspacesError = useWorkspaceStore((s) => s.error);
-  const defaultWorkspaceId = useWorkspaceStore((s) => s.defaultWorkspaceId);
-  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
-  const billingView = resolveBillingView(billingRequest, {
-    loaded: billingWorkspacesLoaded,
-    error: billingWorkspacesError,
-    workspaces: billingWorkspaces,
-  });
-  useEffect(() => {
-    if (!onBillingRequestChange) return;
-    const settled = settleBillingRequest(billingRequest, {
-      loaded: billingWorkspacesLoaded,
-      error: billingWorkspacesError,
-      workspaces: billingWorkspaces,
-    });
-    if (settled !== billingRequest) onBillingRequestChange(settled);
-  }, [
-    billingRequest,
-    billingWorkspaces,
-    billingWorkspacesError,
-    billingWorkspacesLoaded,
-    onBillingRequestChange,
-  ]);
-  // The grid's Pro badge is the personal plan; these mark what workspaces provide.
-  const workspacePlans = billingWorkspacesLoaded
-    ? entitledWorkspacePlans(billingWorkspaces)
-    : new Set<string>();
-  const enterpriseAction = billingWorkspacesLoaded
-    ? enterpriseManageAction(billingWorkspaces, activeWorkspaceId)
-    : null;
-  const businessAction = billingWorkspacesLoaded
-    ? businessDowngradeAction(billingWorkspaces, activeWorkspaceId)
-    : null;
-  const businessTile = businessTileAction({
-    // Until usage loads, its covering ids read as none, which would offer a covered member a workspace.
-    listLoaded: billingWorkspacesLoaded && usage?.status === "success",
-    listError: billingWorkspacesError,
-    entitledWorkspaceIds: usage?.entitledWorkspaceIds,
-    workspaces: billingWorkspaces,
-    defaultWorkspaceId,
-  });
-  const enterpriseTile = enterpriseTileAction({
-    // Until usage loads, its covering ids read as none, which would ask a covered member to contact sales.
-    listLoaded: billingWorkspacesLoaded && usage?.status === "success",
-    listError: billingWorkspacesError,
-    entitledWorkspaceIds: usage?.entitledWorkspaceIds,
-    workspaces: billingWorkspaces,
-    defaultWorkspaceId,
-    activeWorkspaceId,
-  });
-  const hasShownApproachingToast = useRef(false);
-  useEffect(() => {
-    if (usage?.isApproachingLimit && !hasShownApproachingToast.current) {
-      hasShownApproachingToast.current = true;
-      toast({
-        title: t("settingsPage.account.toasts.approachingLimit.title"),
-        description: t("settingsPage.account.toasts.approachingLimit.description", {
-          used: usage.wordsUsed.toLocaleString(i18n.language),
-          limit: usage.limit.toLocaleString(i18n.language),
-        }),
-        duration: 6000,
-      });
-    }
-  }, [usage?.isApproachingLimit, usage?.wordsUsed, usage?.limit, toast, t, i18n.language]);
-
-  const installTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { registerHotkey, isRegistering: isHotkeyRegistering } = useHotkeyRegistration({
     onSuccess: (registeredHotkey) => {
@@ -881,47 +555,6 @@ export default function SettingsPage({
     showErrorToast: true,
     showAlert: showAlertDialog,
   });
-
-  const meetingRegisterFn = useCallback(async (hotkey: string) => {
-    const result = await window.electronAPI?.registerMeetingHotkey?.(hotkey);
-    // No `message`: useHotkeyRegistration falls back to the translated
-    // hooks.hotkeyRegistration.errors.couldNotRegister, and that string is what
-    // gets shown in a toast. An English literal here would surface untranslated.
-    return result ?? { success: false };
-  }, []);
-
-  const { registerHotkey: registerMeetingHotkey, isRegistering: isMeetingHotkeyRegistering } =
-    useHotkeyRegistration({
-      onSuccess: (registeredHotkey) => {
-        setMeetingKey(registeredHotkey);
-      },
-      showSuccessToast: false,
-      showErrorToast: true,
-      showAlert: showAlertDialog,
-      registerFn: meetingRegisterFn,
-    });
-
-  // Agent hotkey setters resolve to false when main-process registration fails;
-  // surface it and return the result so HotkeyListInput rolls the row back.
-  const [isAgentHotkeyCommitting, setIsAgentHotkeyCommitting] = useState(false);
-  const commitAgentHotkey = useCallback(
-    async (setter: (key: string) => Promise<HotkeyRegistrationResult>, key: string) => {
-      setIsAgentHotkeyCommitting(true);
-      try {
-        const result = await setter(key);
-        if (!result.success) {
-          showAlertDialog({
-            title: t("hooks.hotkeyRegistration.titles.notRegistered"),
-            description: result.message || t("hooks.hotkeyRegistration.errors.failedToRegister"),
-          });
-        }
-        return result.success;
-      } finally {
-        setIsAgentHotkeyCommitting(false);
-      }
-    },
-    [showAlertDialog, t]
-  );
 
   const validateDictationHotkey = useCallback(
     (hotkey: string) =>
@@ -937,48 +570,6 @@ export default function SettingsPage({
     [meetingKey, voiceAgentKey, translationKey, t]
   );
 
-  const validateMeetingHotkey = useCallback(
-    (hotkey: string) =>
-      validateHotkeyForSlot(
-        hotkey,
-        {
-          "settingsPage.general.hotkey.title": dictationKey,
-          "settingsPage.general.voiceAgentHotkey.title": voiceAgentKey,
-          "settingsPage.general.translationHotkey.title": translationKey,
-        },
-        t
-      ),
-    [dictationKey, voiceAgentKey, translationKey, t]
-  );
-
-  const validateVoiceAgentHotkey = useCallback(
-    (hotkey: string) =>
-      validateHotkeyForSlot(
-        hotkey,
-        {
-          "settingsPage.general.hotkey.title": dictationKey,
-          "settingsPage.general.meetingHotkey.title": meetingKey,
-          "settingsPage.general.translationHotkey.title": translationKey,
-        },
-        t
-      ),
-    [dictationKey, meetingKey, translationKey, t]
-  );
-
-  const validateTranslationHotkey = useCallback(
-    (hotkey: string) =>
-      validateHotkeyForSlot(
-        hotkey,
-        {
-          "settingsPage.general.hotkey.title": dictationKey,
-          "settingsPage.general.meetingHotkey.title": meetingKey,
-          "settingsPage.general.voiceAgentHotkey.title": voiceAgentKey,
-        },
-        t
-      ),
-    [dictationKey, meetingKey, voiceAgentKey, t]
-  );
-
   const {
     isUsingNativeShortcut,
     isUsingHyprland,
@@ -990,22 +581,6 @@ export default function SettingsPage({
   const [linuxPttAvailable, setLinuxPttAvailable] = useState(true);
 
   const platform = getCachedPlatform();
-
-  const [modelListUpdates, setModelListUpdates] = useState(true);
-  useEffect(() => {
-    window.electronAPI
-      ?.getModelRegistryUpdates?.()
-      .then(setModelListUpdates)
-      .catch(() => {});
-  }, []);
-  const updateModelListUpdates = async (enabled: boolean) => {
-    setModelListUpdates(enabled);
-    const result = await window.electronAPI?.setModelRegistryUpdates?.(enabled);
-    if (result && !result.success) {
-      setModelListUpdates(!enabled);
-      logger.error("Failed to save model list updates", { error: result.error }, "settings");
-    }
-  };
 
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
   const [autoStartNeedsApproval, setAutoStartNeedsApproval] = useState(false);
@@ -1025,20 +600,6 @@ export default function SettingsPage({
   useEffect(() => {
     readAutoStartState().finally(() => setAutoStartLoading(false));
   }, [readAutoStartState]);
-
-  useEffect(() => {
-    window.electronAPI?.syncNotificationPreferences?.({
-      notificationsEnabled,
-      notifyMeetingDetection,
-      notifyCalendarReminders,
-      meetingProcessDetection,
-    });
-  }, [
-    notificationsEnabled,
-    notifyMeetingDetection,
-    notifyCalendarReminders,
-    meetingProcessDetection,
-  ]);
 
   const handleAutoStartChange = async (enabled: boolean) => {
     if (!window.electronAPI?.setAutoStartEnabled) return;
@@ -1179,431 +740,10 @@ export default function SettingsPage({
       },
     });
   }, [isRemovingModels, cachePathHint, showConfirmDialog, showAlertDialog, t]);
-
-  const { isSignedIn, isLoaded, user, refetch, isOfflineAccount } = useAuth();
-  const {
-    canToggleSync: canToggleInsightsSync,
-    disableInsightsSync,
-    enableInsightsSync,
-    optInDialog: insightsOptInDialog,
-    syncAllowedByPolicy: insightsSyncAllowedByPolicy,
-  } = useInsightsSyncOptIn();
-  const {
-    enabled: leaderboardParticipationEnabled,
-    error: leaderboardParticipationError,
-    join: joinLeaderboard,
-    leave: leaveLeaderboard,
-    leavePending: leaderboardLeavePending,
-    ready: leaderboardParticipationReady,
-    updating: leaderboardParticipationUpdating,
-  } = useLeaderboardParticipation({ autoRefresh: activeSection === "privacyData" });
-  const [leaderboardPreferencePending, setLeaderboardPreferencePending] = useState(false);
-  const updateLeaderboardParticipation = useCallback(
-    async (enabled: boolean) => {
-      if (!isSignedIn || !leaderboardParticipationReady || leaderboardPreferencePending) return;
-      setLeaderboardPreferencePending(true);
-      try {
-        if (enabled) {
-          if (
-            !effectiveDataRetentionEnabled ||
-            !insightsSyncAllowedByPolicy ||
-            (!insightsSyncEnabled && !(await enableInsightsSync({ confirmWhenEmpty: true })))
-          )
-            return;
-          if (!(await joinLeaderboard())) {
-            toast({
-              title: t("insights.leaderboard.activationError"),
-              variant: "destructive",
-            });
-          }
-          return;
-        }
-
-        if (!(await leaveLeaderboard())) {
-          toast({ title: t("insights.leaderboard.leavePending") });
-        }
-      } finally {
-        setLeaderboardPreferencePending(false);
-      }
-    },
-    [
-      effectiveDataRetentionEnabled,
-      enableInsightsSync,
-      insightsSyncAllowedByPolicy,
-      insightsSyncEnabled,
-      isSignedIn,
-      joinLeaderboard,
-      leaderboardParticipationReady,
-      leaderboardPreferencePending,
-      leaveLeaderboard,
-      t,
-      toast,
-    ]
-  );
-  const formatPersonalBillingDate = useCallback(
-    (iso: string): string => formatBillingDate(iso, i18n.language),
-    [i18n.language]
-  );
-  const { requestSignOut, isSigningOut } = useSignOut({ showConfirmDialog, showAlertDialog });
-  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
-  const [isDeleteAccountDialogOpen, setIsDeleteAccountDialogOpen] = useState(false);
-  const [eraseDeviceData, setEraseDeviceData] = useState(false);
-  const [yearlyBilling, setYearlyBilling] = useState(true);
-  const [proCheckoutOpening, setProCheckoutOpening] = useState(false);
-  // The portal opens for several actions; only the one clicked should spin.
-  const [portalAction, setPortalAction] = useState<PersonalAction["kind"] | null>(null);
-  const [switchPreview, setSwitchPreview] = useState<{
-    plan: "monthly" | "annual";
-    tier: "pro" | "business";
-    immediateAmount: number;
-    currency: string;
-    newPriceAmount: number;
-    newInterval: string;
-    nextBillingDate: string | null;
-  } | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-
-  const handleSwitchPlan = useCallback(
-    async (plan: "monthly" | "annual", tier: "pro" | "business") => {
-      setPreviewLoading(true);
-      try {
-        const preview = await usage.previewSwitchPlan({ plan, tier });
-        if (!preview.success) {
-          toast({
-            title: t("settingsPage.account.checkout.couldNotOpenTitle"),
-            description: preview.error || t(checkoutErrorDescriptionKey(preview.code)),
-          });
-          return;
-        }
-        if (preview.alreadyOnPlan) {
-          toast({ title: t("settingsPage.account.pricing.planSwitched") });
-          return;
-        }
-        setSwitchPreview({
-          plan,
-          tier,
-          immediateAmount: preview.immediateAmount ?? 0,
-          currency: preview.currency ?? "usd",
-          newPriceAmount: preview.newPriceAmount ?? 0,
-          newInterval: preview.newInterval ?? "month",
-          nextBillingDate: preview.nextBillingDate ?? null,
-        });
-      } finally {
-        setPreviewLoading(false);
-      }
-    },
-    [usage, toast, t]
-  );
-
-  const confirmSwitchPlan = useCallback(async () => {
-    if (!switchPreview) return;
-    const { plan, tier } = switchPreview;
-    setSwitchPreview(null);
-    const result = await usage.switchPlan({ plan, tier });
-    if (result.success) {
-      toast({ title: t("settingsPage.account.pricing.planSwitched") });
-    } else {
-      toast({
-        title: t("settingsPage.account.checkout.couldNotOpenTitle"),
-        description: result.error || t(checkoutErrorDescriptionKey(result.code)),
-      });
-    }
-  }, [switchPreview, usage, toast, t]);
-
-  const subscribePro = useCallback(async () => {
-    if (!usage) return;
-    setProCheckoutOpening(true);
-    try {
-      const result = await usage.openCheckout({
-        plan: billingIntervalChoice(yearlyBilling),
-        tier: "pro",
-      });
-      if (!result.success) {
-        toast({
-          title: t("settingsPage.account.checkout.couldNotOpenTitle"),
-          description: t(checkoutErrorDescriptionKey(result.code)),
-          variant: "destructive",
-        });
-      }
-    } finally {
-      setProCheckoutOpening(false);
-    }
-  }, [usage, yearlyBilling, toast, t]);
-
-  const billingEnabled = false;
-  const { state: personalState, refreshSummary: refreshPersonalSummary } = usePersonalPlanBilling({
-    enabled: billingEnabled,
-    view: billingView.kind,
-    signedIn: Boolean(isSignedIn),
-    usage: usage ?? null,
-    coveringWorkspaceNames: coveringWorkspaces(usage?.entitledWorkspaceIds, billingWorkspaces).map(
-      (workspace) => workspace.name
-    ),
-    businessAction: businessTile,
-    hasWorkspacePlanAction: Boolean(
-      businessAction || enterpriseAction || enterpriseTile.kind === "viewWorkspace"
-    ),
-  });
-  const { openBillingPortal, isOpening: isOpeningBilling } = useBillingPortal(
-    usage,
-    billingEnabled &&
-      billingView.kind === "personal" &&
-      personalState.kind === "ready" &&
-      personalState.actions.some((action) => action.kind === "manageBilling")
-  );
-  const showCreatorLink = showsCreatorLink(usage ?? null);
-  const personalHandlers: PersonalPlanHandlers = {
-    subscribePro: () => void subscribePro(),
-    openBillingPortal: () => void openBillingPortal(refreshPersonalSummary),
-    openExternal: (url) => void window.electronAPI?.openExternal?.(url),
-    signIn: requestSignIn,
-    retry: () => void usage?.retry(),
-    viewWorkspace: (workspaceId) => onBillingRequestChange?.({ kind: "workspace", workspaceId }),
-    createWorkspace: () => setCreateWorkspaceOpen(true),
-  };
-  const handlePersonalAction = (action: PersonalAction): void => {
-    setPortalAction(action.kind);
-    runPersonalAction(action, personalHandlers);
-  };
-  const busyAction = personalBusyAction({
-    proCheckoutOpening,
-    isRetrying: Boolean(usage?.isRetrying),
-    isOpeningBilling,
-    portalAction,
-  });
-  const proCardKind = personalProCardKind({
-    signedIn: Boolean(isSignedIn),
-    state: personalState,
-    usage: usage ?? null,
-  });
-  const proCardAction: ProCardAction =
-    proCardKind === "subscribe"
-      ? { kind: "subscribe", busy: proCheckoutOpening, onClick: () => void subscribePro() }
-      : proCardKind === "downgrade"
-        ? {
-            kind: "downgrade",
-            busy: previewLoading || Boolean(usage?.checkoutLoading),
-            onClick: () => void handleSwitchPlan(billingIntervalChoice(yearlyBilling), "pro"),
-          }
-        : { kind: proCardKind };
-
-  const handleDeleteAccount = useCallback(() => {
-    setEraseDeviceData(false);
-    setIsDeleteAccountDialogOpen(true);
-  }, []);
-
-  const confirmDeleteAccount = useCallback(async () => {
-    const accountId = user?.id;
-    const authGeneration = getValidatedAuthGeneration();
-    if (!accountId || authGeneration == null) {
-      showAlertDialog({
-        title: t("settingsPage.account.deleteAccount.failedTitle"),
-        description: t("settingsPage.account.deleteAccount.failedDescription"),
-      });
-      return;
-    }
-
-    // A background answer must not write under an account whose data is about to go.
-    resetChatForAccountChange();
-    setIsDeletingAccount(true);
-    try {
-      const result = await executeAccountDeletion({
-        eraseDeviceData,
-        dependencies: {
-          deleteRemoteAccount: deleteAccount,
-          deleteLocalAccountData: async () => {
-            const cleanup = await window.electronAPI?.deleteAccountData?.(
-              accountId,
-              authGeneration,
-              { erasingDevice: eraseDeviceData }
-            );
-            if (!cleanup?.success) {
-              throw new Error(cleanup?.error ?? "Could not remove local account data");
-            }
-            syncService.forgetAccount(accountId);
-          },
-          clearWorkspaceSessionState: () => syncService.purgeTeamSpacesForSignOut(),
-          signOut,
-          eraseDeviceData: async () => {
-            const cleanup = await window.electronAPI?.cleanupApp();
-            if (!cleanup?.success) {
-              throw new Error(cleanup?.errors?.join(", ") || "Could not erase device data");
-            }
-          },
-        },
-      });
-
-      showAlertDialog({
-        title: t("settingsPage.account.deleteAccount.successTitle"),
-        description:
-          result.localCleanupFailures.length > 0
-            ? t("settingsPage.account.deleteAccount.partialCleanupDescription")
-            : t("settingsPage.account.deleteAccount.successDescription"),
-      });
-      // cleanup-app leaves the database closed; only a relaunch reopens it.
-      setTimeout(() => {
-        if (eraseDeviceData) {
-          window.electronAPI?.relaunchApp();
-        } else {
-          window.location.reload();
-        }
-      }, 1000);
-    } catch (error) {
-      logger.error("Account deletion failed", error, "auth");
-      showAlertDialog({
-        title: t("settingsPage.account.deleteAccount.failedTitle"),
-        description: t("settingsPage.account.deleteAccount.failedDescription"),
-      });
-    } finally {
-      setIsDeletingAccount(false);
-    }
-  }, [eraseDeviceData, showAlertDialog, t, user?.id]);
-
-  const renderWhisperVadSettings = () => (
-    <div>
-      <SectionHeader
-        title={t("settingsPage.transcription.vad.title")}
-        description={t("settingsPage.transcription.vad.description")}
-      />
-      <SettingsPanel>
-        <SettingsPanelRow>
-          <SettingsRow
-            label={t("settingsPage.transcription.vad.toggles.dictation.title")}
-            description={t("settingsPage.transcription.vad.toggles.dictation.description")}
-          >
-            <Toggle checked={dictationSileroEnabled} onChange={setDictationSileroEnabled} />
-          </SettingsRow>
-        </SettingsPanelRow>
-        <SettingsPanelRow>
-          <SettingsRow
-            label={t("settingsPage.transcription.vad.toggles.noteRecording.title")}
-            description={t("settingsPage.transcription.vad.toggles.noteRecording.description")}
-          >
-            <Toggle checked={noteRecordingSileroEnabled} onChange={setNoteRecordingSileroEnabled} />
-          </SettingsRow>
-        </SettingsPanelRow>
-        <SettingsPanelRow>
-          <SettingsRow
-            label={t("settingsPage.transcription.vad.toggles.meeting.title")}
-            description={t("settingsPage.transcription.vad.toggles.meeting.description")}
-          >
-            <Toggle checked={meetingSileroEnabled} onChange={setMeetingSileroEnabled} />
-          </SettingsRow>
-        </SettingsPanelRow>
-        <SettingsPanelRow>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
-            <div className="space-y-1.5">
-              <VADLabelWithInfo
-                label={t("settingsPage.transcription.vad.fields.threshold.label")}
-                description={t("settingsPage.transcription.vad.fields.threshold.info")}
-              />
-              <Input
-                dir="ltr"
-                type="number"
-                step="0.01"
-                min="0.1"
-                max="0.95"
-                value={whisperVadThreshold}
-                onChange={(e) => setWhisperVadThreshold(Number(e.target.value))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <VADLabelWithInfo
-                label={t("settingsPage.transcription.vad.fields.minSpeechDurationMs.label")}
-                description={t("settingsPage.transcription.vad.fields.minSpeechDurationMs.info")}
-              />
-              <Input
-                dir="ltr"
-                type="number"
-                step="10"
-                min="50"
-                max="2000"
-                value={whisperVadMinSpeechDurationMs}
-                onChange={(e) => setWhisperVadMinSpeechDurationMs(Number(e.target.value))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <VADLabelWithInfo
-                label={t("settingsPage.transcription.vad.fields.minSilenceDurationMs.label")}
-                description={t("settingsPage.transcription.vad.fields.minSilenceDurationMs.info")}
-              />
-              <Input
-                dir="ltr"
-                type="number"
-                step="10"
-                min="50"
-                max="2000"
-                value={whisperVadMinSilenceDurationMs}
-                onChange={(e) => setWhisperVadMinSilenceDurationMs(Number(e.target.value))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <VADLabelWithInfo
-                label={t("settingsPage.transcription.vad.fields.maxSpeechDurationS.label")}
-                description={t("settingsPage.transcription.vad.fields.maxSpeechDurationS.info")}
-              />
-              <Input
-                dir="ltr"
-                type="number"
-                step="1"
-                min="5"
-                max="120"
-                value={whisperVadMaxSpeechDurationS}
-                onChange={(e) => setWhisperVadMaxSpeechDurationS(Number(e.target.value))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <VADLabelWithInfo
-                label={t("settingsPage.transcription.vad.fields.speechPadMs.label")}
-                description={t("settingsPage.transcription.vad.fields.speechPadMs.info")}
-              />
-              <Input
-                dir="ltr"
-                type="number"
-                step="10"
-                min="0"
-                max="1000"
-                value={whisperVadSpeechPadMs}
-                onChange={(e) => setWhisperVadSpeechPadMs(Number(e.target.value))}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <VADLabelWithInfo
-                label={t("settingsPage.transcription.vad.fields.samplesOverlap.label")}
-                description={t("settingsPage.transcription.vad.fields.samplesOverlap.info")}
-              />
-              <Input
-                dir="ltr"
-                type="number"
-                step="0.01"
-                min="0"
-                max="0.95"
-                value={whisperVadSamplesOverlap}
-                onChange={(e) => setWhisperVadSamplesOverlap(Number(e.target.value))}
-              />
-            </div>
-          </div>
-        </SettingsPanelRow>
-      </SettingsPanel>
-    </div>
-  );
+  const isSignedIn = false;
 
   const renderSectionContent = () => {
     switch (activeSection) {
-      case "workspaceGeneral":
-        return <WorkspaceGeneralSection onNavigateToSection={onNavigateToSection} />;
-
-      case "workspacePeople":
-        return (
-          <WorkspacePeopleSection initialSubTab={initialSubTab} onOpenTeamspace={onOpenTeamspace} />
-        );
-
-      case "workspaceTeamspaces":
-        return <WorkspaceTeamspacesSection onOpenTeamspace={onOpenTeamspace} />;
-
-      case "workspaceDeveloper":
-        return <WorkspaceDeveloperSection />;
-
       case "general":
         return (
           <div className="space-y-6">
@@ -2837,10 +1977,9 @@ EOF`,
                             title: t("settingsPage.developer.resetAll.title"),
                             description: t("settingsPage.developer.resetAll.description"),
                             onConfirm: async () => {
-                              resetChatForAccountChange();
                               try {
                                 try {
-                                  await signOut();
+                                  undefined;
                                 } catch {}
                                 await window.electronAPI?.cleanupApp();
                                 showAlertDialog({
@@ -2884,8 +2023,6 @@ EOF`,
 
   return (
     <>
-      {insightsOptInDialog}
-
       <ConfirmDialog
         open={confirmDialog.open}
         onOpenChange={(open) => !open && hideConfirmDialog()}
@@ -2896,42 +2033,6 @@ EOF`,
         confirmText={confirmDialog.confirmText}
         cancelText={confirmDialog.cancelText}
       />
-
-      <ConfirmDialog
-        open={isDeleteAccountDialogOpen}
-        onOpenChange={(open) => {
-          setIsDeleteAccountDialogOpen(open);
-          if (!open) setEraseDeviceData(false);
-        }}
-        title={t("settingsPage.account.deleteAccount.title")}
-        description={t("settingsPage.account.deleteAccount.description")}
-        onConfirm={() => void confirmDeleteAccount()}
-        variant="destructive"
-        confirmText={t("settingsPage.account.deleteAccount.confirmText")}
-        confirmDisabled={isDeletingAccount}
-      >
-        <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3">
-          <input
-            type="checkbox"
-            className="mt-1 h-4 w-4 rounded border-border accent-destructive"
-            checked={eraseDeviceData}
-            onChange={(event) => setEraseDeviceData(event.target.checked)}
-          />
-          <span className="space-y-1">
-            <span className="block text-sm font-medium">
-              {t("settingsPage.account.deleteAccount.eraseDeviceLabel")}
-            </span>
-            <span className="block text-xs text-muted-foreground">
-              {t("settingsPage.account.deleteAccount.eraseDeviceDescription")}
-            </span>
-            {eraseDeviceData && (
-              <span className="block text-xs font-medium text-destructive">
-                {t("settingsPage.account.deleteAccount.eraseDeviceWarning")}
-              </span>
-            )}
-          </span>
-        </label>
-      </ConfirmDialog>
 
       <AlertDialog
         open={alertDialog.open}

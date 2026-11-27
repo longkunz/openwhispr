@@ -14,10 +14,6 @@ import { useMainProcessNotifications } from "./hooks/useMainProcessNotifications
 import { useListeningEntrancePhase } from "./hooks/useListeningEntrancePhase";
 import { useWindowResizeCompensation } from "./hooks/useWindowResizeCompensation";
 import { useSettingsStore } from "./stores/settingsStore";
-import { isAgentAllowed } from "./stores/policyRules";
-import { usePolicyStore } from "./stores/policyStore";
-import { useTranscriptionContextAllowed } from "./hooks/usePolicy";
-import { meetingStartRefusalKey } from "./helpers/trayActionPolicy";
 import { VoicePill } from "./components/dictation/VoicePill";
 import { LiveTranscriptPanel } from "./components/dictation/LiveTranscriptPanel";
 import { VoiceModePanelCore } from "./components/dictation/VoiceModePanelCore";
@@ -109,9 +105,6 @@ export default function App() {
 
   useWindowResizeCompensation();
   useMainProcessNotifications({ toast, dismiss, t });
-
-  const agentAllowed = usePolicyStore(isAgentAllowed);
-  const meetingAllowed = useTranscriptionContextAllowed("meeting");
 
   const mainWindowResizeCoordinatorRef = useRef(null);
   useEffect(() => {
@@ -295,23 +288,6 @@ export default function App() {
     });
     return () => unsubscribe?.();
   }, [isRecording, isPreparing, isProcessing, cancelRecording, cancelProcessing]);
-
-  // Every tray refusal surfaces the pill first, so the message is visible even
-  // when the pill was hidden. useTrayQuickActions decides when one is needed.
-  const refuse = useCallback(
-    (messageKey) => {
-      void window.electronAPI?.showDictationPanel?.();
-      toast({ title: t(messageKey), variant: "default" });
-    },
-    [toast, t]
-  );
-
-  // The meeting hotkey and tray item start in main, which refuses under policy.
-  useEffect(
-    () =>
-      window.electronAPI?.onMeetingStartRefused?.((code) => refuse(meetingStartRefusalKey(code))),
-    [refuse]
-  );
 
   // Auto-hide the floating icon when idle (setting enabled or dictation cycle completed)
   useEffect(() => {
@@ -604,29 +580,10 @@ export default function App() {
               buttonRef={buttonRef}
               align={voicePillPopoverAlign}
               isRecording={isRecording}
-              agentAllowed={agentAllowed}
-              meetingAllowed={meetingAllowed}
               isHovered={isHovered}
               setWindowInteractivity={setWindowInteractivity}
               onToggleListening={() => {
                 toggleListening();
-              }}
-              onAskAssistant={() => {
-                setIsCommandMenuOpen(false);
-                void window.electronAPI?.openAgentWindow?.();
-              }}
-              onStartMeeting={() => {
-                setIsCommandMenuOpen(false);
-                // Main refuses under policy before the start reaches the
-                // engine, so it never sends meeting-start-refused for this.
-                void window.electronAPI?.startManualMeeting?.().then((result) => {
-                  if (
-                    result?.code === "POLICY_MEETING_RECORDING_DISABLED" ||
-                    result?.code === "POLICY_UNRESOLVABLE"
-                  ) {
-                    refuse(meetingStartRefusalKey(result.code));
-                  }
-                });
               }}
               onHide={() => {
                 setIsCommandMenuOpen(false);

@@ -58,73 +58,6 @@ test("a self-hosted 404 blames the user's server, not OpenAI", async (t) => {
   assert.doesNotMatch(error.message, /OpenAI/);
 });
 
-test('a direct-fetch "Failed to fetch" asks to check the key and connection', async (t) => {
-  const manager = await loadManager(t, { cloudTranscriptionProvider: "groq" });
-  t.mock.method(globalThis, "fetch", async () => {
-    throw new TypeError("Failed to fetch");
-  });
-
-  const error = await rejection(manager.processWithOpenAIAPI(recording()));
-
-  assert.equal(error.code, "PROVIDER_NO_RESPONSE");
-  assert.equal(error.messageKey, "providerErrors.noResponse");
-  assert.equal(error.settingsTarget, "speechToText");
-  assert.equal(error.messageParams.provider, "Groq");
-  assert.equal(error.surface, "transcription");
-});
-
-test("a cancelled direct fetch stays an AbortError", async (t) => {
-  const manager = await loadManager(t, { cloudTranscriptionProvider: "openai" });
-  t.mock.method(globalThis, "fetch", async () => {
-    throw new DOMException("The operation was aborted.", "AbortError");
-  });
-
-  const error = await rejection(manager.processWithOpenAIAPI(recording()));
-
-  assert.equal(error.name, "AbortError");
-  assert.equal(error.code, 20);
-  assert.equal(error.messageKey, undefined);
-});
-
-test("a proxied provider's net::ERR_* failure is classified with its display name", async (t) => {
-  const manager = await loadManager(
-    t,
-    { cloudTranscriptionProvider: "mistral", cloudTranscriptionModel: "voxtral-mini-latest" },
-    // What serializeIpcError returns for an unclassified net.fetch rejection.
-    { proxyMistralTranscription: async () => ({ error: "net::ERR_INTERNET_DISCONNECTED" }) }
-  );
-
-  const error = await rejection(manager.processWithOpenAIAPI(recording()));
-
-  assert.equal(error.code, "PROVIDER_UNREACHABLE");
-  assert.equal(error.messageParams.provider, "Mistral");
-  assert.equal(error.message, "Couldn't reach Mistral. Check your connection.");
-});
-
-test("a proxied provider's already-classified failure passes through unchanged", async (t) => {
-  const manager = await loadManager(
-    t,
-    { cloudTranscriptionProvider: "mistral", cloudTranscriptionModel: "voxtral-mini-latest" },
-    {
-      proxyMistralTranscription: async () => ({
-        error: "Mistral rejected your API key.",
-        code: "PROVIDER_AUTH_FAILED",
-        messageKey: "providerErrors.authFailed",
-        messageParams: { provider: "Mistral" },
-        settingsTarget: "speechToText",
-        status: 401,
-        surface: "transcription",
-      }),
-    }
-  );
-
-  const error = await rejection(manager.processWithOpenAIAPI(recording()));
-
-  assert.equal(error.code, "PROVIDER_AUTH_FAILED");
-  assert.equal(error.status, 401);
-  assert.equal(error.settingsTarget, "speechToText");
-});
-
 // Self-hosted dictation sends no key unless the server is Orukeet (shouldSkipTranscriptionApiKey).
 const noKey = { getAPIKey: async () => null };
 const dictationHeaders = {
@@ -146,10 +79,6 @@ test("self-hosted dictation sends dictation's headers only, and only to the self
   await manager.processWithOpenAIAPI(recording());
   assert.equal(calls[0].redirect, "manual");
   assert.deepEqual(calls[0].headers, { "x-api-key": "dictation-key" });
-  const other = await loadManager(t, { cloudTranscriptionProvider: "openai", ...dictationHeaders });
-  await other.processWithOpenAIAPI(recording());
-  assert.equal(new Headers(calls.at(-1).headers).has("x-api-key"), false);
-  assert.equal(calls.at(-1).redirect, "follow");
 });
 
 test("self-hosted dictation with no effective custom headers keeps redirect follow", async (t) => {

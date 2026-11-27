@@ -2,9 +2,8 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "./lib/utils";
 import { useUiLocale } from "../hooks/useUiLocale";
-import { Button } from "./ui/button";
 import { PAGE_CONTENT_WIDTH_CLASS } from "./ui/pageWidth";
-import { Loader2, Sparkles, X, Trash2, Archive } from "./icons";
+import { Loader2, Trash2, Archive } from "./icons";
 import TranscriptionItem from "./ui/TranscriptionItem";
 import ThemedEmptyIllustration from "./ui/ThemedEmptyIllustration";
 import DictationHotkeyHint from "./ui/DictationHotkeyHint";
@@ -21,9 +20,6 @@ interface HistoryViewProps {
   history: TranscriptionItemType[];
   isLoading: boolean;
   hotkey: string;
-  aiCTADismissed: boolean;
-  setAiCTADismissed: (dismissed: boolean) => void;
-  useCleanupModel: boolean;
   copyToClipboard: (text: string) => void;
   deleteTranscription: (id: number) => void;
   clearAllTranscriptions: () => void;
@@ -39,9 +35,6 @@ export default function HistoryView({
   history,
   isLoading,
   hotkey,
-  aiCTADismissed,
-  setAiCTADismissed,
-  useCleanupModel,
   copyToClipboard,
   deleteTranscription,
   clearAllTranscriptions,

@@ -16,6 +16,7 @@ const notProtected = (message) =>
 // environment, so no quoting of it reaches the script.
 const WINDOWS_ACL_SCRIPT = `
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security') -Force
 $acl = Get-Acl -LiteralPath $env:OW_BOOTSTRAP_PATH
 $sid = [System.Security.Principal.SecurityIdentifier]
 $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value

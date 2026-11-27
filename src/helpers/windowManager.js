@@ -1751,7 +1751,6 @@ class WindowManager {
     this.hideDictationPanel();
     this._onboardingActive = false;
     if (!this._floatingIconAutoHide) this.showDictationPanel();
-    this.agentWindow?.prewarm();
     // A close pressed during initial loading could not ask the renderer yet.
     this._requestControlPanelRelease();
     return true;

@@ -32,8 +32,7 @@ test("new notes stay open without recording when policy changes during save", as
       export const setActiveNoteId = (id) => globalThis.__notePolicyTest.opened.push(id);`,
     },
   });
-  const { useCreateNote, startRecordingForNote } =
-    await vite.ssrLoadModule("/hooks/useCreateNote.ts");
+  const { useCreateNote } = await vite.ssrLoadModule("/hooks/useCreateNote.ts");
   let createNote;
   function Harness() {
     ({ createNote } = useCreateNote(() => globalThis.__notePolicyTest.allowed));
@@ -50,13 +49,4 @@ test("new notes stay open without recording when policy changes during save", as
   });
   assert.deepEqual(opened, [41]);
   assert.deepEqual(starts, []);
-  globalThis.__notePolicyTest.allowed = true;
-  await React.act(async () => {
-    await createNote();
-  });
-  assert.equal(starts.length, 1);
-  assert.equal(typeof starts[0].canAutoStart, "function");
-  // Explicit Record does not receive the automatic-only guard.
-  await startRecordingForNote(note);
-  assert.equal(starts[1].canAutoStart, undefined);
 });

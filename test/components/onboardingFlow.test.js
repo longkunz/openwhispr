@@ -1,5 +1,4 @@
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
 const test = require("node:test");
 
 const load = () => import("../../src/components/onboarding/flow.ts");
@@ -42,48 +41,6 @@ test("macOS accessibility features stay deferred until the permissions screen", 
   assert.equal(shouldInitializeMacAccessibilityFeatures("notes"), true);
 });
 
-test("onboarding permission checks use the resolved macOS feature gate", () => {
-  const source = readFileSync("src/components/OnboardingFlow.tsx", "utf8");
-
-  assert.ok(
-    source.indexOf("const currentStepId = reconcileStepWithRoute") <
-      source.indexOf("const permissions = usePermissions")
-  );
-  assert.ok(
-    source.includes(
-      "macAccessibilityChecksEnabled: shouldInitializeMacAccessibilityFeatures(currentStepId)"
-    )
-  );
-});
-
-test("no onboarding route hands an older build's pending pick to the tray", () => {
-  // The tray applies a pending pick, switching cleanup and the assistant on, only
-  // while this flag is set. The local route has already written the user's own
-  // switches by then, so no finish may set it.
-  const source = readFileSync("src/components/OnboardingFlow.tsx", "utf8");
-  assert.doesNotMatch(source, /setItem\(\s*"localSetupPending"/);
-  assert.doesNotMatch(source, /hasPendingLocalModels/);
-});
-
-test("the local setup step is wired through its helpers", () => {
-  const source = readFileSync("src/components/OnboardingFlow.tsx", "utf8");
-  // Plan inputs and Proceed live in localSetupFlow.ts, where they are tested.
-  assert.match(source, /planLocalSetup\(\{/);
-  assert.match(source, /proceedWithLocalSetup\(localSetupPlan, handOff, \(beforeComplete\) =>/);
-  assert.match(source, /finalizeOnboarding\("local", beforeComplete\)/);
-  // A policy refresh that is loading or failed keeps the plan the step is using.
-  assert.match(source, /const localSetupPlan = computedLocalSetupPlan \?\? latchedLocalSetupPlan;/);
-  assert.doesNotMatch(source, /buildLocalSetupPlan|applyLocalSetupSettings/);
-  // The space read runs only around the choice.
-  const steps = String.raw`currentStepId === "setup-choice" \|\| currentStepId === "local-setup"`;
-  assert.match(source, new RegExp(String.raw`useLocalSetupSpace\(\s*${steps}\s*\)`));
-  // A policy that couldn't be read gets a line instead of a blank card.
-  const placeholder = String.raw`<LocalSetupStepPlaceholder\s+message=\{policy\.status === "error"`;
-  assert.match(source, new RegExp(String.raw`${placeholder} \? t\("common\.policyUnresolved"\)`));
-  // Back during the finish would unmount the step and cancel what Proceed handed on.
-  assert.match(source, /backDisabled=\{isFinishing\}/);
-});
-
 test("each step asks for its window size, local setup a taller one", async () => {
   const { getOnboardingWindowMode } = await load();
   assert.equal(getOnboardingWindowMode("auth"), "compact");
@@ -104,13 +61,6 @@ test("each step asks for its window size, local setup a taller one", async () =>
   ]) {
     assert.equal(getOnboardingWindowMode(id), "expanded", id);
   }
-});
-
-test("onboarding sizes the window from the current step", () => {
-  const source = readFileSync("src/components/OnboardingFlow.tsx", "utf8");
-  // The plan placeholder renders on local-setup too, so it gets the same size.
-  assert.match(source, /const windowMode = getOnboardingWindowMode\(currentStepId\);/);
-  assert.match(source, /setOnboardingWindowMode\?\.\(windowMode\);\s*\}, \[windowMode\]\);/);
 });
 
 test("guest flow keeps permissions and the hotkey before setup choice", async () => {
@@ -620,15 +570,6 @@ test("tray ignores local-setup downloads", async () => {
   assert.equal(on("local-setup"), true);
   assert.equal(on("notes"), false);
   assert.equal(on("setup-choice"), false);
-});
-
-test("SetupChoiceStep sends Local straight to its step, with no warning dialog", () => {
-  const source = readFileSync("src/components/onboarding/SetupChoiceStep.tsx", "utf8");
-  assert.doesNotMatch(source, /warnings\.local|warnings\.\$\{/);
-  assert.doesNotMatch(source, /onboarding-setup-warning-hero/);
-  assert.match(source, /onClick=\{\(\) => onSelect\("local"\)\}/);
-  assert.match(source, /setupChoice\.local\.features\.setup/);
-  assert.doesNotMatch(source, /setupChoice\.local\.features\.models/);
 });
 
 test("a session written before the resume flags infers its hotkey confirmations", async () => {

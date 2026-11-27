@@ -1,24 +1,12 @@
 import React, { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { prepareControlPanelRelease } from "../utils/controlPanelRelease";
 import { useTranslation } from "react-i18next";
-import { useShallow } from "zustand/react/shallow";
-import { Button } from "./ui/button";
-import { PAGE_CONTENT_WIDTH_CLASS } from "./ui/pageWidth";
-import { cn } from "./lib/utils";
-import { BIDI_VALUE_TOKEN, BidiInterpolatedText } from "./ui/BidiInterpolatedText";
-import { AlertTriangle } from "./icons";
 import PostMigrationOnboarding from "./PostMigrationOnboarding";
 import { SelfHostedSetupDialog } from "./SelfHostedSetupDialog";
 import { ConfirmDialog, AlertDialog } from "./ui/dialog";
 import { useDialogs } from "../hooks/useDialogs";
-import { useSignOut } from "../hooks/useSignOut";
 import { useHotkey } from "../hooks/useHotkey";
 import { useToast } from "./ui/useToast";
-import { useSettings } from "../hooks/useSettings";
-import { recordingRecorderName } from "../utils/noteRecorder";
-import { useAuth } from "../hooks/useAuth";
-import { useJoinableWorkspaces } from "../hooks/useJoinableWorkspaces";
-import { useUsage } from "../hooks/useUsage";
 import { useCollapsibleSidebar } from "../hooks/useCollapsibleSidebar";
 import {
   useTranscriptions,
@@ -29,91 +17,33 @@ import {
   clearTranscriptions as clearStore,
 } from "../stores/transcriptionStore";
 import { clearInsightsCache } from "../lib/insightsCache";
-import {
-  getSettings,
-  selectPolicyEffectiveSettings,
-  useSettingsStore,
-} from "../stores/settingsStore";
-import { subscribeChatAccountScope, subscribeChatPolicy } from "../stores/chatTurnStore";
+import { getSettings } from "../stores/settingsStore";
 import { usePolicyStore } from "../stores/policyStore";
-import { useWorkspaceStore } from "../stores/workspaceStore";
-import { startWorkspaceScopeBridge } from "../stores/workspaceScopeBridge";
-import { useEnsureDefaultWorkspace } from "../hooks/useWorkspace";
-import type { EnterpriseAudioTestLink } from "../types/enterpriseAudio";
-import { usePolicySnapshot, useMeetingAutoTranscriptionCheck } from "../hooks/usePolicy";
-import { getKeytermDictionaryWords, limitBatchKeyterms } from "../utils/snippets";
-import { providerCleanupStandsIn } from "../helpers/dictationRouting";
-import { handleMeetingRecordingRequest } from "../helpers/meetingRecordingRequest";
-import { useMeetingNoteSession } from "../hooks/useMeetingNoteSession";
 import {
   isAgentAllowed,
-  isAudioFeatureAllowed,
   isControlPanelViewAllowed,
   isPolicyActionAllowed,
-  isTranscriptionContextAllowed,
-  isUpdateRequiredByOrg,
-  transcriptionChoiceRefusal,
 } from "../stores/policyRules";
-import {
-  allowsPersonalDictationCleanup,
-  canUseAssemblyAiRewrite,
-  getManagedTranscriptionResolution,
-} from "../services/managedTranscription";
-import {
-  useIsMeetingMode,
-  useIsNarrowWindow,
-  useMeetingRecordingStore,
-} from "../stores/meetingRecordingStore";
+import { useIsMeetingMode, useIsNarrowWindow } from "../stores/meetingRecordingStore";
 import ControlPanelSidebar from "./ControlPanelSidebar";
 import ControlPanelTopBar from "./ControlPanelTopBar";
 import { useControlPanelNavItems, type ControlPanelView } from "./controlPanelNav";
-import {
-  navigateAndLoadMeetingNote,
-  navigateMeetingNotification,
-} from "./meetingNotificationNavigation";
-import MeetingRecordingMount from "./MeetingRecordingMount";
-import MeetingRecordingPill from "./notes/MeetingRecordingPill";
 import NewNoteMenu from "./notes/NewNoteMenu";
 
 import { getCachedPlatform } from "../utils/platform";
 import { isAccessibilitySkipped } from "../utils/permissions";
-import { startRecordingForNote, useCreateNote } from "../hooks/useCreateNote";
+import { useCreateNote } from "../hooks/useCreateNote";
 import {
   setActiveNoteId,
   setActiveFolderId,
   navigateToContainer,
   ensureNoteLoaded,
-  getActiveNoteIdValue,
-  getNoteFromStore,
   useActiveNoteId,
   initializeNotes,
-  subscribeMeetingNotificationFolders,
 } from "../stores/noteStore";
-import { fetchProviders as fetchStreamingProviders } from "../stores/streamingProvidersStore";
-import {
-  executeTranslationChain,
-  hasTextContent,
-  shouldRunTranslateStep,
-} from "../helpers/translationChain";
-import { applyChineseScript, resolveChineseScriptTarget } from "../utils/chineseScript";
-import { getAgentName } from "../utils/agentName";
 import HistoryView from "./HistoryView";
-import BackgroundActionToastListener from "./notes/BackgroundActionToastListener";
-import AssistantNoteUndoListener from "./notes/AssistantNoteUndoListener";
-import { assertValidCleanupOutput } from "../utils/cleanupOutput";
-import { providerErrorActions, providerErrorToastProps } from "../utils/describeProviderError";
-import SpaceSyncToastListener from "./notes/SpaceSyncToastListener";
-import { syncService } from "../services/SyncService.js";
-import logger from "../utils/logger";
-import AcceptInvitationModal from "./AcceptInvitationModal";
-import JoinYourTeamModal from "./JoinYourTeamModal";
+import { providerErrorToastProps } from "../utils/describeProviderError";
 import { useModalGate } from "../stores/modalGateStore";
-import { useInvitationNotesEntry } from "../hooks/useInvitationNotesEntry";
-import {
-  consumePendingInvitationToken,
-  clearPendingInvitationToken,
-} from "../utils/pendingInvitationToken";
-import type { MeetingStartSource } from "../types/electron";
 
 const platform = getCachedPlatform();
 
@@ -152,7 +82,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     };
   }, []);
   const { t } = useTranslation();
-  useEffect(subscribeMeetingNotificationFolders, []);
   const history = useTranscriptions();
   const [isLoading, setIsLoading] = useState(true);
   const [showSettings, setShowSettings] = useState(!!initialSettingsSection);
@@ -165,22 +94,9 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   // Counts named show-settings requests, so asking again for the section the
   // modal was opened at still lands there after the user moved elsewhere in it.
   const [settingsRequest, setSettingsRequest] = useState(0);
-  const [aiCTADismissed, setAiCTADismissed] = useState(
-    () => localStorage.getItem("aiCTADismissed") === "true"
-  );
-  const [invitationToken, setInvitationToken] = useState<string | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const showDiscarded = useShowDiscarded();
   const [activeView, setActiveView] = useState<ControlPanelView>("home");
-  useModalGate("invitation", invitationToken !== null);
-  // Accepting an invitation or joining a workspace routes to Notes, which may open its structure
-  // intro. Notes is lazy, so it can mount late; this holds the gate until it has taken over.
-  const [notesHandOff, setNotesHandOff] = useState(false);
-  const finishNotesHandOff = useCallback(() => setNotesHandOff(false), []);
-  useModalGate("notesHandOff", notesHandOff && activeView === "personal-notes");
-  const [invitationNotesEntry, setInvitationNotesEntry] = useInvitationNotesEntry(
-    activeView === "personal-notes"
-  );
   const navItems = useControlPanelNavItems();
   const {
     collapsed: sidebarCollapsed,
@@ -195,83 +111,13 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   const activeNoteId = useActiveNoteId();
   const isSidePanelLayout =
     isMeetingMode || (isNarrowWindow && activeView === "personal-notes" && activeNoteId != null);
-  const recordingNoteId = useMeetingRecordingStore((s) => s.recordingNoteId);
-  const recordingFolderId = useMeetingRecordingStore((s) => s.recordingFolderId);
-  const [meetingRecordingRequest, setMeetingRecordingRequest] = useState<{
-    noteId: number;
-    folderId: number | null;
-    event: any;
-    startSource?: MeetingStartSource;
-    trigger?: string;
-    noteSessionId?: string;
-  } | null>(null);
-  releaseBlocked.current = isLoading || meetingRecordingRequest !== null || notesHandOff;
-  const [gpuBannerDismissed, setGpuBannerDismissed] = useState(
-    () => localStorage.getItem("gpuBannerDismissedUnified") === "true"
-  );
-  const updateReadyToastShown = useRef(false);
+  releaseBlocked.current = isLoading;
   const { hotkey } = useHotkey();
   const { toast } = useToast();
-  const { useCleanupModel } = useSettings();
-  const { isSignedIn, isLoaded: authLoaded, user } = useAuth();
-  const canAutoStartMeeting = useMeetingAutoTranscriptionCheck({
-    isLoaded: authLoaded,
-    isSignedIn,
-  });
-  // Suppressed while a deep-linked invitation is open so the two never stack.
-  const {
-    joinable,
-    pending: joinablePending,
-    dismiss: dismissJoinable,
-    markRequested,
-  } = useJoinableWorkspaces(user?.id ?? null, isSignedIn && !invitationToken);
-  useModalGate("joinYourTeamPending", joinablePending);
-  const usage = useUsage();
-
-  const openTranscriptionSettings = useCallback(() => {
-    setSettingsSection("transcription");
-    setShowSettings(true);
-  }, []);
-  const workspacesLoaded = useWorkspaceStore((state) => state.loaded);
-  const activeWorkspaceId = useWorkspaceStore((state) => state.activeWorkspaceId);
-  const [audioTestLink, setAudioTestLink] = useState<EnterpriseAudioTestLink | null>(null);
-  useEffect(() => {
-    const claim = (): void => {
-      void window.electronAPI?.claimEnterpriseAudioTest?.().then((link) => {
-        if (link) setAudioTestLink(link);
-      });
-    };
-    claim();
-    return window.electronAPI?.onEnterpriseAudioTestRequested?.(claim);
-  }, []);
-  // Settings consumes a link for the active workspace; any other one is dropped here.
-  useEffect(() => {
-    if (!audioTestLink || !authLoaded || (isSignedIn && !workspacesLoaded)) return;
-    setAudioTestLink(null);
-    if (isSignedIn && audioTestLink.workspaceId === activeWorkspaceId) {
-      openTranscriptionSettings();
-      return;
-    }
-    void window.electronAPI?.getPendingEnterpriseAudioTest?.(true);
-    toast({ description: t("enterprise.audio.testLinkOtherWorkspace") });
-  }, [
-    audioTestLink,
-    authLoaded,
-    isSignedIn,
-    workspacesLoaded,
-    activeWorkspaceId,
-    openTranscriptionSettings,
-    toast,
-    t,
-  ]);
+  const isSignedIn = false;
 
   const agentAllowedByPolicy = usePolicyStore(isAgentAllowed);
-  useEffect(subscribeChatPolicy, []);
-  useEffect(subscribeChatAccountScope, []);
-  // Main resolves where new private notes go from the workspace this window has active.
-  useEffect(startWorkspaceScopeBridge, []);
-  useEnsureDefaultWorkspace();
-  const { createNote } = useCreateNote(canAutoStartMeeting);
+  const { createNote } = useCreateNote();
   // The note is created before the view switches so Notes mounts with it already open.
   const handleNewNote = useCallback(async () => {
     await createNote();
@@ -283,12 +129,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
       setActiveView("home");
     }
   }, [activeView, agentAllowedByPolicy, policyActionsAllowed]);
-  const updateRequiredByOrg = usePolicyStore(isUpdateRequiredByOrg);
-  const policyMinAppVersion = usePolicyStore((s) => s.policy?.minAppVersion ?? null);
-
-  // Policy-effective, because the settings pane the GPU banner links to renders
-  // the clamped mode — see eligibleGpuOffers.
-  const policySnapshot = usePolicySnapshot();
 
   const {
     confirmDialog,
@@ -298,7 +138,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     hideConfirmDialog,
     hideAlertDialog,
   } = useDialogs();
-  const { requestSignOut } = useSignOut({ showConfirmDialog, showAlertDialog });
 
   const loadTranscriptions = useCallback(
     async (includeDiscarded?: boolean) => {
@@ -356,159 +195,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
   }, []);
 
   useEffect(() => {
-    const dispose = window.electronAPI?.onLimitReached?.(() => {
-      toast({
-        title: t("controlPanel.limit.weeklyTitle"),
-        description: t("controlPanel.limit.weeklyDescription"),
-        duration: 5000,
-      });
-    });
-
-    return () => {
-      dispose?.();
-    };
-  }, [toast, t]);
-
-  useEffect(() => {
-    if (!usage?.isPastDue) return;
-    if (sessionStorage.getItem("pastDueNotified")) return;
-    sessionStorage.setItem("pastDueNotified", "true");
-    toast({
-      title: t("controlPanel.billing.pastDueTitle"),
-      description: t("controlPanel.billing.pastDueDescription"),
-      variant: "destructive",
-      duration: 8000,
-    });
-  }, [usage?.isPastDue, toast, t]);
-
-  useEffect(() => {
-    const unsubscribe = window.electronAPI?.onWorkspaceInvitationToken?.((token) => {
-      setInvitationToken(token);
-      // Consume the main-process stash so a handled push isn't re-pulled on a
-      // later remount.
-      void window.electronAPI?.getPendingInvitationToken?.();
-    });
-    window.electronAPI?.getPendingInvitationToken?.().then((token) => {
-      if (token) setInvitationToken(token);
-    });
-    return () => unsubscribe?.();
-  }, []);
-
-  useEffect(() => {
-    // Also when signed out (the modal's "Sign in to accept" handles auth);
-    // isSignedIn stays in the deps so a stored token resurfaces after sign-in.
-    if (!authLoaded) return;
-    const pending = consumePendingInvitationToken();
-    if (pending) {
-      setInvitationToken(pending);
-      clearPendingInvitationToken();
-    }
-  }, [authLoaded, isSignedIn]);
-
-  // A ref, not a per-run flag: StrictMode's remount must not cancel the first drain.
-  const meetingNavigationMounted = useRef(false);
-  const meetingNoteSession = useMeetingNoteSession(activeView, activeNoteId);
-  const recordingIdentityRef = useRef({ user, t });
-  recordingIdentityRef.current = { user, t };
-  useEffect(() => {
-    meetingNavigationMounted.current = true;
-    const isCurrent = () => meetingNavigationMounted.current;
-    const drain = async () => {
-      const data = await window.electronAPI?.getPendingMeetingNoteNavigation?.();
-      if (!data) return;
-      if (data.navigationId) {
-        if (!isCurrent() || data.spaceId == null) {
-          await window.electronAPI.confirmMeetingNoteNavigation(data.navigationId, "cancel");
-          return;
-        }
-        setActiveView("personal-notes");
-        await navigateMeetingNotification(
-          { ...data, navigationId: data.navigationId, spaceId: data.spaceId },
-          isCurrent,
-          () => import("./notes/PersonalNotesView"),
-          (note) => {
-            const { user: recordingUser, t: translate } = recordingIdentityRef.current;
-            if (data.noteSessionId)
-              meetingNoteSession.current = { id: data.noteSessionId, noteId: note.id };
-            void handleMeetingRecordingRequest({
-              args: {
-                noteId: note.id,
-                noteTitle: note.title,
-                folderId: note.folder_id,
-                autoEndEligible: true,
-              },
-              canAutoStart: canAutoStartMeeting,
-              startRecording: (args) =>
-                startRecordingForNote(
-                  note,
-                  recordingRecorderName(note, recordingUser, translate),
-                  "prompt",
-                  args.canAutoStart
-                ),
-              restoreFromMeetingMode: () => window.electronAPI?.restoreFromMeetingMode?.(),
-              onSuppressed: () =>
-                data.noteSessionId
-                  ? window.electronAPI?.meetingNoteOpenedWithoutRecording?.(data.noteSessionId)
-                  : undefined,
-              onHandled: () => {},
-            }).catch((error) =>
-              logger.warn(
-                "Failed to start notification recording",
-                { error: String(error) },
-                "meeting"
-              )
-            );
-          }
-        );
-        return;
-      }
-      if (!isCurrent()) {
-        // Main already gave this navigation away, so nothing else can end its session.
-        if (data.noteSessionId) void window.electronAPI?.meetingNoteClosed?.(data.noteSessionId);
-        return;
-      }
-      if (data.noteSessionId)
-        meetingNoteSession.current = { id: data.noteSessionId, noteId: data.noteId };
-      setActiveView("personal-notes");
-      await navigateAndLoadMeetingNote(data.noteId, data.spaceId, data.folderId);
-      if (
-        !isCurrent() ||
-        getActiveNoteIdValue() !== data.noteId ||
-        !getNoteFromStore(data.noteId) ||
-        (data.noteSessionId && meetingNoteSession.current?.id !== data.noteSessionId)
-      ) {
-        if (data.noteSessionId) void window.electronAPI?.meetingNoteClosed?.(data.noteSessionId);
-        return;
-      }
-      setMeetingRecordingRequest({
-        noteId: data.noteId,
-        folderId: data.folderId,
-        event: data.event,
-        startSource: data.startSource,
-        trigger: data.trigger,
-        noteSessionId: data.noteSessionId,
-      });
-      if (
-        data.trigger === "hotkey" &&
-        useSettingsStore.getState().meetingHotkeyLayoutMode === "side-panel"
-      ) {
-        window.electronAPI?.snapToMeetingMode?.();
-      }
-    };
-    const safeDrain = () => {
-      void drain().catch((error) =>
-        logger.warn("Failed to open meeting note", { error: String(error) }, "meeting")
-      );
-    };
-    safeDrain();
-    const cleanup = window.electronAPI?.onMeetingNoteNavigationPending?.(safeDrain);
-    return () => {
-      meetingNavigationMounted.current = false;
-      cleanup?.();
-    };
-  }, [canAutoStartMeeting, meetingNoteSession]);
-
-  useEffect(() => {
     const drain = async () => {
       const data = await window.electronAPI?.getPendingNoteNavigation?.();
       if (!data) return;
@@ -557,26 +243,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     });
     return () => cleanup?.();
   }, [toast, t]);
-
-  // The config is refused while the org has meetings off, so it's fetched again
-  // whenever they become allowed.
-  const meetingAllowedByPolicy = usePolicyStore((state) => isAudioFeatureAllowed(state, "meeting"));
-  useEffect(() => {
-    if (meetingAllowedByPolicy) fetchStreamingProviders();
-  }, [meetingAllowedByPolicy]);
-
-  const handleMeetingRecordingRequestHandled = useCallback(
-    () => setMeetingRecordingRequest(null),
-    []
-  );
-
-  // Settings sits over the notes view, so a teamspace opens by closing it and landing the tree there.
-  const openTeamspace = useCallback((spaceId: number) => {
-    setShowSettings(false);
-    setSettingsSection(undefined);
-    navigateToContainer(spaceId, null);
-    setActiveView("personal-notes");
-  }, []);
   const openNoteInNotes = useCallback(
     (noteId: number, folderId: number | null, spaceId?: number | null) => {
       if (folderId != null) setActiveFolderId(folderId);
@@ -625,7 +291,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
             const result = await window.electronAPI.deleteTranscription(id);
             if (result.success) {
               removeFromStore(id);
-              syncService.requestSyncAll("manual");
             } else {
               showAlertDialog({
                 title: t("controlPanel.history.couldNotDeleteTitle"),
@@ -660,7 +325,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
             clearStore();
             // Insights is unmounted here, and would otherwise paint the cleared totals.
             clearInsightsCache();
-            syncService.requestSyncAll("manual");
             toast({
               title: t("controlPanel.history.clearAllSuccess"),
               variant: "success",
@@ -702,256 +366,21 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
     },
     [toast, t]
   );
-
   const retryTranscription = useCallback(
-    async (id: number, options?: { isRecover?: boolean }) => {
-      try {
-        const s = getSettings();
-        const managed = getManagedTranscriptionResolution();
-        if (managed?.kind === "error") {
-          toast({
-            title: managed.messageKey ? t(managed.messageKey) : managed.message,
-            variant: "destructive",
-          });
-          return;
-        }
-        if (
-          !managed &&
-          !isTranscriptionContextAllowed(
-            usePolicyStore.getState(),
-            s,
-            "dictation",
-            allowsPersonalDictationCleanup
-          )
-        ) {
-          const refusal = transcriptionChoiceRefusal(usePolicyStore.getState(), s, "dictation");
-          toast({
-            title: t(refusal?.messageKey ?? "common.managedByOrg"),
-            variant: "default",
-            ...(refusal ? { actions: providerErrorActions(refusal, t) } : {}),
-          });
-          return;
-        }
-        const result = await window.electronAPI.retryTranscription(id, {
-          managed,
-          useLocalWhisper: s.useLocalWhisper,
-          localTranscriptionProvider: s.localTranscriptionProvider,
-          cloudTranscriptionMode: s.cloudTranscriptionMode,
-          cloudTranscriptionProvider: s.cloudTranscriptionProvider,
-          cloudTranscriptionModel: s.cloudTranscriptionModel,
-          cloudTranscriptionBaseUrl: s.cloudTranscriptionBaseUrl,
-          cortiEnvironment: s.cortiEnvironment,
-          cortiTenant: s.cortiTenant,
-          parakeetModel: s.parakeetModel,
-          cohereModel: s.cohereModel,
-          whisperModel: s.whisperModel,
-          preferredLanguage: s.preferredLanguage,
-          translationSourceLanguage: s.translationSourceLanguage,
-          keyterms: limitBatchKeyterms(getKeytermDictionaryWords(s)),
-          transcriptionMode: s.transcriptionMode,
-          remoteTranscriptionType: s.remoteTranscriptionType,
-          remoteTranscriptionUrl: s.remoteTranscriptionUrl,
-          remoteTranscriptionModel: s.remoteTranscriptionModel,
-        });
-        if (result.success && result.transcription) {
-          const rawText = result.transcription.text;
-          let finalTranscription = result.transcription;
-
-          // A translation dictation must re-run cleanup-then-translate on retry, not plain cleanup.
-          let handledTranslation = false;
-          let translationApplied = false;
-          if (result.transcription.route_kind === "translation") {
-            handledTranslation = true;
-            try {
-              const [
-                { default: ReasoningService },
-                { resolveReasoningRoute },
-                { getEffectiveCleanupModel, getSettings: getEffectiveSettings },
-              ] = await Promise.all([
-                import("../services/ReasoningService"),
-                import("../helpers/audioManager"),
-                import("../stores/settingsStore"),
-              ]);
-              const settings = getEffectiveSettings();
-              const agentName = getAgentName();
-              const route = resolveReasoningRoute(rawText, settings, agentName, false, true);
-              if (route.kind === "translation") {
-                const { text, translated } = await executeTranslationChain({
-                  text: rawText,
-                  cleanupReachable: route.cleanupReachable,
-                  runCleanup: (currentText: string) =>
-                    ReasoningService.processText(
-                      currentText,
-                      getEffectiveCleanupModel(),
-                      agentName,
-                      route.cleanupConfig
-                    ),
-                  runTranslate: (currentText: string) =>
-                    ReasoningService.processText(currentText, route.model, agentName, route.config),
-                  shouldTranslate: shouldRunTranslateStep(
-                    settings.translationSourceLanguage,
-                    settings.translationTargetLanguage
-                  ),
-                  onCleanupError: (cleanupError: unknown) => {
-                    logger.warn(
-                      "Cleanup step failed in translation chain, translating raw transcript",
-                      { error: (cleanupError as Error).message },
-                      "transcription"
-                    );
-                    // The chain still translates the raw transcript, so say why cleanup
-                    // was dropped rather than reporting a clean success (#2091).
-                    toast({
-                      title: t("app.toasts.cleanupFailed.title"),
-                      ...providerErrorToastProps(cleanupError, t),
-                      variant: "destructive",
-                    });
-                  },
-                  onEmptyTranslate: () =>
-                    logger.warn(
-                      "Translation step returned empty text, keeping previous text",
-                      {},
-                      "transcription"
-                    ),
-                  onUnchangedTranslate: () =>
-                    logger.warn(
-                      "Translation step returned unchanged text, keeping source text",
-                      {},
-                      "transcription"
-                    ),
-                });
-                translationApplied = translated;
-                if (text !== rawText) {
-                  const updated = await window.electronAPI.updateTranscriptionText(
-                    id,
-                    text,
-                    rawText
-                  );
-                  if (updated.success && updated.transcription) {
-                    finalTranscription = updated.transcription;
-                  }
-                }
-              } else {
-                // Translation disabled/unreachable since recording — fall through to cleanup.
-                handledTranslation = false;
-              }
-            } catch {
-              // Reasoning failed — keep the raw STT result
-            }
-          }
-
-          // Apply AI reasoning if enabled
-          if (!handledTranslation && useCleanupModel) {
-            try {
-              const [
-                { default: ReasoningService },
-                { getEffectiveCleanupModel, isCloudCleanupMode, getSettings },
-              ] = await Promise.all([
-                import("../services/ReasoningService"),
-                import("../stores/settingsStore"),
-              ]);
-              const model = getEffectiveCleanupModel();
-              const isCloud = isCloudCleanupMode();
-              // A provider's own rewrite stands in for cleanup, as on a fresh dictation.
-              const providerCleanedText =
-                result.cleanedText?.trim() &&
-                providerCleanupStandsIn(getSettings(), {
-                  cleanupReachable: !!model || isCloud,
-                  providerLlmAllowed: canUseAssemblyAiRewrite(),
-                })
-                  ? result.cleanedText.trim()
-                  : "";
-              if (providerCleanedText) assertValidCleanupOutput(rawText, providerCleanedText);
-              if (providerCleanedText || model || isCloud) {
-                const reasonedText =
-                  providerCleanedText ||
-                  (await ReasoningService.processText(rawText, model, getAgentName(), {
-                    disableThinking: getSettings().cleanupDisableThinking,
-                    reasoningEffort: getSettings().cleanupReasoningEffort,
-                    requireCompleteOutput: true,
-                  }));
-                if (hasTextContent(reasonedText) && reasonedText !== rawText) {
-                  const updated = await window.electronAPI.updateTranscriptionText(
-                    id,
-                    reasonedText,
-                    rawText
-                  );
-                  if (updated.success && updated.transcription) {
-                    finalTranscription = updated.transcription;
-                  }
-                }
-              }
-            } catch (cleanupError) {
-              // The row keeps its raw transcript, so the retry must not look like it
-              // cleaned anything — report why, the way dictation does (#2091).
-              toast({
-                title: t("app.toasts.cleanupFailed.title"),
-                ...providerErrorToastProps(cleanupError, t),
-                variant: "destructive",
-              });
-            }
-          }
-
-          // Deterministic Chinese script pass, mirroring dictation (#975). Runs last so
-          // it covers the cleaned/translated text, or the raw transcript when neither ran.
-          // Same rule as audioManager.getEffectiveOutputLanguage: only a completed
-          // translate step moves the text into the target language, so anything else
-          // still has to be scripted as the language that was dictated.
-          try {
-            const outputLanguage =
-              result.transcription.route_kind === "translation"
-                ? (translationApplied
-                    ? s.translationTargetLanguage
-                    : s.translationSourceLanguage) || "auto"
-                : s.preferredLanguage;
-            const scripted = await applyChineseScript(
-              finalTranscription.text,
-              resolveChineseScriptTarget(
-                outputLanguage,
-                s.chineseScriptPreference,
-                finalTranscription.text
-              )
-            );
-            if (scripted !== finalTranscription.text) {
-              const updated = await window.electronAPI.updateTranscriptionText(
-                id,
-                scripted,
-                rawText
-              );
-              if (updated.success && updated.transcription) {
-                finalTranscription = updated.transcription;
-              }
-            }
-          } catch {
-            // Conversion failed — keep the text as transcribed
-          }
-
-          updateInStore(finalTranscription);
-          toast({
-            title: t(
-              options?.isRecover
-                ? "controlPanel.history.discarded.recovered"
-                : "controlPanel.history.retrySuccess"
-            ),
-            // A partial result still replaced the row; say so, as dictation does.
-            ...(result.warning
-              ? { description: t("hooks.audioRecording.partialTranscription.description") }
-              : {}),
-          });
-        } else {
-          toast({
-            title: t("controlPanel.history.retryError"),
-            ...providerErrorToastProps({ ...result, message: result.error }, t),
-            variant: "destructive",
-          });
-        }
-      } catch {
+    async (id: number) => {
+      const result = await window.electronAPI.retryTranscription(id, getSettings());
+      if (!result?.success) {
         toast({
           title: t("controlPanel.history.retryError"),
+          ...providerErrorToastProps(result, t),
           variant: "destructive",
         });
+        return;
       }
+      if (result.transcription) updateInStore(result.transcription);
+      toast({ title: t("controlPanel.history.retrySuccess") });
     },
-    [toast, t, useCleanupModel]
+    [toast, t]
   );
 
   const toggleShowDiscarded = useCallback(() => {
@@ -960,16 +389,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
 
   return (
     <div className="h-screen bg-surface-window flex flex-col">
-      <MeetingRecordingMount />
-      <MeetingRecordingPill
-        activeView={activeView}
-        activeNoteId={activeNoteId}
-        onReturnToNote={() => {
-          setActiveView("personal-notes");
-          setActiveFolderId(recordingFolderId);
-          setActiveNoteId(recordingNoteId);
-        }}
-      />
       <ConfirmDialog
         open={confirmDialog.open}
         onOpenChange={hideConfirmDialog}
@@ -1006,31 +425,9 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
               if (!open) setSettingsSection(undefined);
             }}
             initialSection={settingsSection}
-            onOpenTeamspace={openTeamspace}
           />
         </Suspense>
       )}
-
-      <AcceptInvitationModal
-        token={invitationToken}
-        onClose={() => setInvitationToken(null)}
-        onAccepted={(entry) => {
-          setInvitationNotesEntry(entry);
-          setNotesHandOff(true);
-          setActiveView("personal-notes");
-        }}
-      />
-
-      <JoinYourTeamModal
-        joinable={joinable}
-        domain={user?.email?.split("@")[1] ?? null}
-        onDismiss={dismissJoinable}
-        onRequested={markRequested}
-        onJoined={() => {
-          setNotesHandOff(true);
-          setActiveView("personal-notes");
-        }}
-      />
 
       {/* Always mounted so the palette chunk is warm and Radix can play its exit animation. */}
       <Suspense fallback={null}>
@@ -1098,46 +495,11 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
               }
             />
             <div className="scrollbar-hidden flex-1 overflow-y-auto">
-              {usage?.isPastDue && activeView === "home" && (
-                <div className={cn(PAGE_CONTENT_WIDTH_CLASS, "px-6 mb-3")}>
-                  <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/50 p-3">
-                    <div className="flex items-start gap-3">
-                      <div className="shrink-0 w-8 h-8 rounded-md bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center">
-                        <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-amber-900 dark:text-amber-200 mb-0.5">
-                          {t("controlPanel.billing.pastDueTitle")}
-                        </p>
-                        <p className="text-xs text-amber-700 dark:text-amber-300/80 mb-2">
-                          {t("controlPanel.billing.bannerDescription", {
-                            limit: usage.limit.toLocaleString(),
-                          })}
-                        </p>
-                        <Button
-                          variant="default"
-                          size="sm"
-                          className="h-7 text-xs"
-                          onClick={() => {
-                            setSettingsSection("account");
-                            setShowSettings(true);
-                          }}
-                        >
-                          {t("controlPanel.billing.updatePayment")}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
               {activeView === "home" && (
                 <HistoryView
                   history={history}
                   isLoading={isLoading}
                   hotkey={hotkey}
-                  aiCTADismissed={aiCTADismissed}
-                  setAiCTADismissed={setAiCTADismissed}
-                  useCleanupModel={useCleanupModel}
                   copyToClipboard={copyToClipboard}
                   deleteTranscription={deleteTranscription}
                   clearAllTranscriptions={clearAllTranscriptions}
@@ -1145,7 +507,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                   onRetryTranscription={retryTranscription}
                   showDiscarded={showDiscarded}
                   onToggleDiscarded={toggleShowDiscarded}
-                  userName={user?.name}
                   onOpenSettings={(section) => {
                     setSettingsSection(section);
                     setShowSettings(true);
@@ -1169,13 +530,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
                       setSettingsSection(section);
                       setShowSettings(true);
                     }}
-                    meetingRecordingRequest={meetingRecordingRequest}
-                    canAutoStartMeeting={canAutoStartMeeting}
-                    onMeetingRecordingRequestHandled={handleMeetingRecordingRequestHandled}
-                    invitationEntry={invitationNotesEntry}
-                    onInvitationEntryHandled={() => setInvitationNotesEntry(null)}
-                    notesHandOff={notesHandOff}
-                    onNotesHandOffDone={finishNotesHandOff}
                   />
                 </Suspense>
               )}
@@ -1198,9 +552,6 @@ export default function ControlPanel({ initialSettingsSection }: ControlPanelPro
           </div>
         </main>
       </div>
-      <BackgroundActionToastListener />
-      <AssistantNoteUndoListener />
-      <SpaceSyncToastListener />
     </div>
   );
 }

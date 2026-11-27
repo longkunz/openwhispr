@@ -18,17 +18,7 @@ test("signed out shows no workspace group", async () => {
   });
 
   assert.deepEqual(ids(nav, "workspace"), []);
-  assert.deepEqual(ids(nav), [
-    "account",
-    "general",
-    "toneStyle",
-    "hotkeys",
-    "plansBilling",
-    "speechToText",
-    "llms",
-    "privacyData",
-    "system",
-  ]);
+  assert.deepEqual(ids(nav), ["general", "hotkeys", "speechToText", "privacyData", "system"]);
 });
 
 test("member sees General, People and Teamspaces, no Developer", async () => {
@@ -65,58 +55,12 @@ test("everyone with a workspace sees Teamspaces, in order", async () => {
   }
 });
 
-test("admin sees Developer last in the workspace group", async () => {
-  const { buildSettingsNav } = await load();
-
-  const nav = buildSettingsNav(SIGNED_IN_ADMIN);
-
-  assert.deepEqual(ids(nav, "workspace"), [
-    "workspaceGeneral",
-    "workspacePeople",
-    "workspaceTeamspaces",
-    "workspaceDeveloper",
-  ]);
-  assert.deepEqual(
-    nav.map((entry) => entry.group),
-    [
-      "account",
-      "account",
-      "account",
-      "account",
-      "account",
-      "workspace",
-      "workspace",
-      "workspace",
-      "workspace",
-      "aiModels",
-      "aiModels",
-      "system",
-      "system",
-    ]
-  );
-});
-
 test("no workspace shows only General in the workspace group", async () => {
   const { buildSettingsNav } = await load();
 
   const nav = buildSettingsNav({ isSignedIn: true, hasWorkspace: false, canManageSettings: true });
 
   assert.deepEqual(ids(nav, "workspace"), ["workspaceGeneral"]);
-});
-
-test("Tone & Style sits right after Preferences", async () => {
-  const { buildSettingsNav } = await load();
-
-  const nav = ids(buildSettingsNav(SIGNED_IN_MEMBER));
-
-  assert.equal(nav[nav.indexOf("general") + 1], "toneStyle");
-  assert.deepEqual(ids(buildSettingsNav(SIGNED_IN_MEMBER), "account"), [
-    "account",
-    "general",
-    "toneStyle",
-    "hotkeys",
-    "plansBilling",
-  ]);
 });
 
 test("legacy workspace deep link opens General", async () => {
@@ -147,7 +91,7 @@ test("hidden Developer falls back to General", async () => {
       "workspace",
       buildSettingsNav({ isSignedIn: false, hasWorkspace: false, canManageSettings: false })
     ),
-    "account"
+    "general"
   );
 });
 
@@ -171,7 +115,7 @@ test("a deep link without a workspace lands on the workspace group", async () =>
       "workspaceTeamspaces",
       buildSettingsNav({ isSignedIn: false, hasWorkspace: false, canManageSettings: false })
     ),
-    "account"
+    "general"
   );
 });
 
@@ -180,13 +124,13 @@ test("legacy AI aliases still resolve", async () => {
 
   const nav = buildSettingsNav(SIGNED_IN_ADMIN);
 
-  assert.equal(resolveSettingsSection("agentMode", nav), "llms");
+  assert.equal(resolveSettingsSection("agentMode", nav), "general");
   assert.equal(resolveSettingsSection("transcription", nav), "speechToText");
   assert.equal(resolveSettingsSection("permissions", nav), "privacyData");
-  assert.equal(resolveSettingsSection("plansBilling", nav), "plansBilling");
-  assert.equal(resolveSettingsSection(undefined, nav), "account");
-  assert.equal(resolveSettingsSection("noSuchSection", nav), "account");
-  assert.equal(LEGACY_SUB_TAB.agentMode, "chatIntelligence");
+  assert.equal(resolveSettingsSection("plansBilling", nav), "general");
+  assert.equal(resolveSettingsSection(undefined, nav), "general");
+  assert.equal(resolveSettingsSection("noSuchSection", nav), "general");
+  assert.equal(LEGACY_SUB_TAB.agentMode, undefined);
 });
 
 test("a meeting's refusal opens Speech-to-Text on its Note Recording tab", async () => {
@@ -210,13 +154,4 @@ test("parsePlansBillingTarget: plansBilling is Personal, a workspace target name
   assert.equal(parsePlansBillingTarget("llms"), null);
   assert.equal(parsePlansBillingTarget(undefined), null);
   assert.equal(parsePlansBillingTarget("plansBilling:workspace:nope"), null);
-});
-
-test("a workspace billing target resolves to the plansBilling section", async () => {
-  const { buildSettingsNav, resolveSettingsSection } = await load();
-  const nav = buildSettingsNav(SIGNED_IN_MEMBER);
-  assert.equal(
-    resolveSettingsSection(`plansBilling:workspace:${BILLING_WORKSPACE_ID}`, nav),
-    "plansBilling"
-  );
 });

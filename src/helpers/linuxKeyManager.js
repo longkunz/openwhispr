@@ -16,9 +16,9 @@ const KEY_A = 30n;
 // word overflows a double). When sysfs cannot say, as in a sandbox without /sys,
 // the node counts as a keyboard rather than refuse a hotkey it may serve.
 function couldBeKeyboard(device) {
-  const capabilities = path.join(INPUT_SYSFS_DIR, device, "device", "capabilities");
+  const capabilities = path.posix.join(INPUT_SYSFS_DIR, device, "device", "capabilities");
   const hasBit = (bitmap, bit) => {
-    const words = fs.readFileSync(path.join(capabilities, bitmap), "utf8").trim().split(" ");
+    const words = fs.readFileSync(path.posix.join(capabilities, bitmap), "utf8").trim().split(" ");
     return ((BigInt(`0x${words.at(-1)}`) >> bit) & 1n) === 1n;
   };
   try {
@@ -208,7 +208,7 @@ class LinuxKeyManager extends EventEmitter {
     let denied = false;
     for (const device of devices) {
       try {
-        fs.accessSync(path.join(INPUT_DIR, device), fs.constants.R_OK);
+        fs.accessSync(path.posix.join(INPUT_DIR, device), fs.constants.R_OK);
       } catch {
         denied = true;
         continue;

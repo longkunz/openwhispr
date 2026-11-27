@@ -575,7 +575,7 @@ test(
     fs.mkdirSync(configDir, { recursive: true });
     fs.writeFileSync(
       luaPath,
-      `-- lua config\ndofile("${bindsPath}")\nreturn {}\n-- trailing comment\n`
+      `-- lua config\ndofile(${JSON.stringify(bindsPath)})\nreturn {}\n-- trailing comment\n`
     );
     const hyprctl = successfulHyprctl("lua");
     const HyprlandShortcutManager = loadManager(hyprctl.execFileSync);

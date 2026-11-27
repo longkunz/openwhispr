@@ -350,27 +350,6 @@ test("edits to the recording's vanished note go to the note the recording went o
   assert.equal(globalThis.__toasts.length, 0, "the recording says it moved");
 });
 
-test("the recording's move to a new note is announced once, with Open", async (t) => {
-  const view = await mountView(t, { recording: true });
-  const { useMeetingRecordingStore } = await view.vite.ssrLoadModule(
-    "/stores/meetingRecordingStore"
-  );
-
-  await React.act(async () =>
-    useMeetingRecordingStore.setState({
-      recordingCopy: { noteId: 700, spaceId: 1, folderId: 9, lostTitle: "Standup" },
-    })
-  );
-
-  assert.equal(globalThis.__toasts.length, 1);
-  const [toast] = globalThis.__toasts;
-  assert.equal(toast.title, "Recording moved to a new note");
-  assert.match(toast.description, /Standup/);
-  toast.actions[0].onClick();
-  assert.deepEqual(globalThis.__opened, [{ id: 700, space_id: 1, folder_id: 9 }]);
-  assert.equal(useMeetingRecordingStore.getState().recordingCopy, null, "said once");
-});
-
 test("deleting a note here tells the recording, and takes that back if the delete fails", async (t) => {
   const view = await mountView(t, { recording: true });
 

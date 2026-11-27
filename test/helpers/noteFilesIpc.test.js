@@ -806,55 +806,6 @@ test("a window reloading while a rename waits doesn't lose the move", async () =
   assert.equal(relativeDir(fileOf(100)), "Workspaces/Acme/Teamspaces/Engineering/Archive");
 });
 
-test("a folder renamed on another device moves its notes when the pull arrives", async () => {
-  await enableMirror();
-
-  await invoke("db-upsert-folder-from-cloud", { id: 10, name: "Pulled" }, 2);
-  await settle();
-
-  assert.equal(relativeDir(fileOf(100)), "Workspaces/Acme/Teamspaces/Engineering/Pulled");
-});
-
-test("a space renamed on another device moves its notes when the pull arrives", async () => {
-  await enableMirror();
-
-  await invoke("db-upsert-space-from-cloud", { id: 2, name: "Pulled space" });
-  await settle();
-
-  assert.equal(relativeDir(fileOf(100)), "Workspaces/Acme/Teamspaces/Pulled space/General");
-});
-
-test("a note pulled from the cloud reaches its file", async () => {
-  await enableMirror();
-
-  await invoke(
-    "db-upsert-note-from-cloud",
-    { id: 100, title: "Acme retro", content: "edited by a teammate", folder_id: 10, space_id: 2 },
-    10,
-    2
-  );
-  await invoke(
-    "db-upsert-note-from-cloud",
-    { id: 105, title: "New from a teammate", content: "new body", folder_id: 10, space_id: 2 },
-    10,
-    2
-  );
-  await settle();
-
-  assert.match(fs.readFileSync(fileOf(100), "utf8"), /edited by a teammate/);
-  assert.equal(relativeDir(fileOf(105)), "Workspaces/Acme/Teamspaces/Engineering/General");
-});
-
-test("a pulled delete removes the file", async () => {
-  await enableMirror();
-  const acmeFile = fileOf(100);
-
-  await invoke("db-upsert-note-from-cloud", { id: 100, deleted_at: "now" }, 10, 2);
-  await settle();
-
-  assert.equal(fs.existsSync(acmeFile), false);
-});
-
 test("folders open from their id, not a name another workspace can share", async () => {
   await enableMirror();
 
@@ -888,7 +839,7 @@ test("a new folder gets its directory in its own space", async () => {
 
 test("mirror writes stop while the feature is off", async () => {
   await invoke("db-rename-folder", 10, "Archive");
-  await invoke("db-upsert-note-from-cloud", { id: 100, content: "x" }, 10, 2);
+  target._asyncMirrorWrite({ ...target.databaseManager.getNote(100), content: "x" });
   await settle();
 
   assert.deepEqual(allFiles(), []);
@@ -1178,19 +1129,6 @@ test("after a database reset nothing already on disk is deleted", async () => {
   for (const [, content] of before) assert.ok(contents.has(content), "every old file survives");
 });
 
-test("a sync pass that changes no space or folder doesn't reread every note", async () => {
-  await enableMirror();
-  const db = target.databaseManager;
-  const reads = db.state.summaryReads;
-  assert.ok(reads > 0, "starting the mirror reconciles once");
-
-  await invoke("db-upsert-space-from-cloud", { id: 2, name: "Engineering" });
-  await invoke("db-upsert-folder-from-cloud", { id: 10, name: "General" }, 2);
-  await settle();
-
-  assert.equal(db.state.summaryReads, reads);
-});
-
 test("notes moved in bulk without any container changing are still moved", async () => {
   await enableMirror();
   target.databaseManager.state.notes.find((note) => note.id === 100).folder_id = null;
@@ -1294,7 +1232,6 @@ for (const channel of [
   "db-delete-folder",
   "db-hard-delete-folder",
   "db-purge-space",
-  "db-relocate-revoked-folder",
   "delete-account-data",
 ]) {
   test(`${channel} removes unchanged legacy files during background migration`, async () => {
@@ -1378,40 +1315,13 @@ for (const channel of [
   });
 }
 
-for (const transition of ["account switch", "scope sign-out", "token sign-out"]) {
-  test(`${transition} drains queued body updates before the scoped reader changes`, async () => {
-    await enableMirror();
-    const db = target.databaseManager;
-    db.activeAccountId = "account-a";
-    db.setActiveAccountId = (accountId) => {
-      db.activeAccountId = accountId;
-      db.state.outOfScopeNoteIds.add(100);
-    };
-    db.claimSignedOutLocalRows = () => {};
-    db.claimLegacyRowsOfOnlyAccount = () => {};
-    await invoke("db-upsert-note-from-cloud", { id: 100, content: "latest cloud body" });
-    if (transition === "token sign-out") {
-      target._handleAuthTokenChange({ token: null, generation: 2 });
-    } else {
-      const result = await invoke(
-        "set-active-account-scope",
-        transition === "account switch" ? "account-b" : null,
-        tokenState.generation
-      );
-      assert.equal(result.success, true);
-    }
-    await settle();
-    assert.match(fs.readFileSync(fileOf(100), "utf8"), /latest cloud body$/);
-  });
-}
-
-for (const mode of ["normal", "update", "held delete"]) {
+for (const mode of ["normal", "held delete"]) {
   const updating = mode === "update";
   // Every quit, an update's included, also ends a live meeting as app-quit in
   // the audit log while its windows are still open.
   test(`${mode} quit synchronously drains queued and deferred note writes once and closes the audit session`, async () => {
     await enableMirror();
-    await invoke("db-upsert-note-from-cloud", { id: 100, content: "body at quit" });
+    target.noteFiles.writeNote({ ...target.databaseManager.getNote(100), content: "body at quit" });
     const db = target.databaseManager;
     let records = 0;
     const record = db.recordMirrorFile;

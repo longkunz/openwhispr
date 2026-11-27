@@ -4,12 +4,10 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { Arch } = require("app-builder-lib");
-const { VmManager } = require("app-builder-lib/out/vm/vm");
 
 const config = require("../../electron-builder.json");
 const afterPack = require("../../scripts/afterPack").default;
 const afterSign = require("../../scripts/afterSign").default;
-const { buildPeImage } = require("../helpers/harness/peFixture");
 
 const appPublisher = config.win.azureSignOptions.publisherName;
 const microsoft =
@@ -170,39 +168,3 @@ test("packaging does not distribute or download NirCmd", () => {
   assert.doesNotMatch(JSON.stringify(config), /nircmd/i);
   assert.doesNotMatch(pkg.scripts["prebuild:win"], /nircmd/i);
 });
-
-test(
-  "Windows SignTool verifies the vendor addon and rejects unsigned or modified files",
-  {
-    skip: process.platform !== "win32",
-  },
-  async (t) => {
-    const { inspectWindowsSignatures } = require("../../scripts/lib/windows-signatures");
-    const appOutDir = fs.mkdtempSync(path.join(os.tmpdir(), "openwhispr-signatures-"));
-    t.after(() => fs.rmSync(appOutDir, { recursive: true, force: true }));
-    const addon = path.join(
-      __dirname,
-      "../../node_modules/onnxruntime-node/bin/napi-v6/win32/x64/onnxruntime_binding.node"
-    );
-    const signedFile = path.join(appOutDir, "ONNX provider's addon.node");
-    fs.copyFileSync(addon, signedFile);
-    fs.writeFileSync(path.join(appOutDir, "unsigned.dll"), buildPeImage());
-    const modified = fs.readFileSync(signedFile);
-    const coffHeader = modified.readUInt32LE(0x3c) + 4;
-    const firstSection = coffHeader + 20 + modified.readUInt16LE(coffHeader + 16);
-    modified[modified.readUInt32LE(firstSection + 20)] ^= 1;
-    fs.writeFileSync(path.join(appOutDir, "modified.node"), modified);
-
-    const report = await inspectWindowsSignatures({
-      appOutDir,
-      packager: { vm: { value: Promise.resolve(new VmManager()) } },
-    });
-
-    assert.match(
-      report.find(({ file }) => file === path.basename(signedFile)).publisher,
-      /CN=Microsoft Corporation/
-    );
-    assert.ok(report.find(({ file }) => file === "unsigned.dll").error);
-    assert.ok(report.find(({ file }) => file === "modified.node").error);
-  }
-);

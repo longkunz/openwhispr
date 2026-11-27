@@ -1,13 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const React = require("react");
 const { renderToStaticMarkup } = require("react-dom/server");
 const { createRendererServer, installBrowserGlobals } = require("../lib/rendererTestHarness");
-
-const source = (relativePath) =>
-  fs.readFileSync(path.join(__dirname, "../..", relativePath), "utf8");
 
 async function load(t) {
   installBrowserGlobals(t);
@@ -59,11 +54,4 @@ test("the announcer is there from the start and says only what the check found",
     const spoken = `class="sr-only">onboarding.rehaul.provider.${announcement}</div>`;
     assert.ok(say(announcement).endsWith(spoken), announcement);
   }
-});
-
-test("Settings' sections and sub-tabs use the shared TabPanel", () => {
-  const settings = source("src/components/SettingsPage.tsx");
-  assert.match(settings, /import \{ TabPanel \} from "\.\/ui\/TabPanel";/);
-  assert.doesNotMatch(settings, /function TabPanel\(/);
-  assert.equal(settings.match(/<TabPanel active=/g).length, 10);
 });

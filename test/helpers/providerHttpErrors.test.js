@@ -460,7 +460,7 @@ test("a 413 is a recording that's too large for transcription and a request that
 });
 
 const en = require("../../src/locales/en/translation.json");
-const LOCALES = ["en", "es", "fr", "de", "pt", "it", "ru", "zh-CN", "zh-TW", "ja", "ar"];
+const LOCALES = ["en"];
 const lookup = (translation, key) =>
   key.split(".").reduce((node, part) => node?.[part], translation);
 

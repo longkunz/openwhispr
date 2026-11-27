@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const { readFileSync } = require("node:fs");
 const vm = require("node:vm");
 const { createRequire } = require("node:module");
+const { execFileSync } = require("node:child_process");
 const {
   createEnterpriseAudioCredentials,
 } = require("../../src/helpers/enterpriseAudioCredentials");
@@ -15,6 +16,38 @@ const {
   removeClaimedBootstraps,
 } = require("../../src/helpers/enterpriseAudioBootstrap");
 const { parseEnterpriseAudioDeepLink } = require("../../src/helpers/enterpriseAudioDeepLink");
+
+async function writeProtectedBootstrap(file, data) {
+  const exists = await fs.stat(file).then(
+    () => true,
+    () => false
+  );
+  await fs.writeFile(file, JSON.stringify(data), { mode: 0o600 });
+  if (process.platform !== "win32" || exists) return;
+  const script = `
+$ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security') -Force
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = Get-Acl -LiteralPath $env:OW_TEST_BOOTSTRAP_PATH
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleSpecific($rule) }
+$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me, 'FullControl', 'Allow')))
+Set-Acl -LiteralPath $env:OW_TEST_BOOTSTRAP_PATH -AclObject $acl
+`;
+  execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64"),
+    ],
+    {
+      windowsHide: true,
+      env: { ...process.env, OW_TEST_BOOTSTRAP_PATH: file },
+    }
+  );
+}
 
 function encryption() {
   const key = crypto.randomBytes(32);
@@ -101,16 +134,12 @@ test("the production vault rejects Linux basic_text before provisioning or impor
     await assert.rejects(fixture.vault.status("account-a", "workspace-a", "http"), {
       code: "SECURE_STORAGE_UNAVAILABLE",
     });
-    await fs.writeFile(
-      source,
-      JSON.stringify({
-        version: 1,
-        accountId: "account-a",
-        workspaceId: "workspace-a",
-        credentials: { http: "device-key" },
-      }),
-      { mode: 0o600 }
-    );
+    await writeProtectedBootstrap(source, {
+      version: 1,
+      accountId: "account-a",
+      workspaceId: "workspace-a",
+      credentials: { http: "device-key" },
+    });
     await assert.rejects(
       importEnterpriseAudioBootstrap({
         directory,
@@ -222,7 +251,7 @@ test("protected MDM imports bind the signed-in account and configured slots and 
     allowedSlots: ["http", "realtime"],
     credentials: vault,
   };
-  const deliver = (data) => fs.writeFile(source, JSON.stringify(data), { mode: 0o600 });
+  const deliver = (data) => writeProtectedBootstrap(source, data);
   try {
     const data = {
       version: 1,
@@ -332,7 +361,7 @@ test("a failed import that can't be restored deletes its claimed plaintext", asy
     credentials: { http: "http-test" },
   };
   try {
-    await fs.writeFile(source, JSON.stringify(data), { mode: 0o600 });
+    await writeProtectedBootstrap(source, data);
     await assert.rejects(
       importEnterpriseAudioBootstrap({
         directory,
