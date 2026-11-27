@@ -1,6 +1,6 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { issueSession, BASE_URL } = require("../../docs/integrations/orukeet/issue-session.cjs");
+const { issueSession, BASE_URL } = require("../../scripts/lib/orukeet-session.cjs");
 const token = "us-west1.test-one-use-token.signature";
 const payload = { token, expires_in: 60, single_use: true, protocol: "orukeet.pcm.v1" };
 

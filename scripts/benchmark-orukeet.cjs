@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const { createHash } = require("node:crypto");
 const { performance } = require("node:perf_hooks");
 const { setTimeout: sleep } = require("node:timers/promises");
-const { issueSession } = require("../docs/integrations/orukeet/issue-session.cjs");
+const { issueSession } = require("./lib/orukeet-session.cjs");
 const { OrukeetStreaming } = require("../src/helpers/orukeetStreaming.js");
 
 function readPcmWav(file) {

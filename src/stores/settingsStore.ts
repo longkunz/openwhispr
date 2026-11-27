@@ -111,6 +111,7 @@ import { getManagedScopeResolution } from "./enterpriseIdentityStore";
 import { syncAfterLocalWrite } from "../services/syncAfterLocalWrite";
 
 import { invalidateReasoningCache } from "../services/reasoningCache";
+import { registerControlPanelReleaseFlusher } from "../utils/controlPanelRelease";
 
 // Requires localStorage as well as window: the module-scope migrations below
 // dereference the bare localStorage global, and test harnesses import this
@@ -1584,11 +1585,34 @@ function createRegisteredHotkeySetter(
 }
 
 let envPersistTimer: ReturnType<typeof setTimeout> | null = null;
+let envPersistPending = false;
+let envPersistInFlight: Promise<unknown> | null = null;
+
+async function persistToEnv() {
+  clearTimeout(envPersistTimer ?? undefined);
+  envPersistTimer = null;
+  if (envPersistInFlight) await envPersistInFlight;
+  if (!envPersistPending) return;
+  envPersistPending = false;
+  const attempt = Promise.resolve().then(() => window.electronAPI?.saveAllKeysToEnv?.());
+  envPersistInFlight = attempt;
+  try {
+    const result = await attempt;
+    if (result?.success === false) throw new Error("Failed to persist settings");
+  } catch (error) {
+    envPersistPending = true;
+    throw error;
+  } finally {
+    if (envPersistInFlight === attempt) envPersistInFlight = null;
+  }
+}
+
 function debouncedPersistToEnv() {
   if (!isBrowser) return;
+  envPersistPending = true;
   if (envPersistTimer) clearTimeout(envPersistTimer);
   envPersistTimer = setTimeout(() => {
-    window.electronAPI?.saveAllKeysToEnv?.().catch((err) => {
+    void persistToEnv().catch((err) => {
       logger.warn(
         "Failed to persist API keys to .env",
         { error: (err as Error).message },
@@ -1631,16 +1655,44 @@ const SECRET_IPC_SAVERS = {
 type SecretProvider = keyof typeof SECRET_IPC_SAVERS;
 
 const secretSaveTimers: Partial<Record<SecretProvider, ReturnType<typeof setTimeout>>> = {};
+const pendingSecrets = new Map<
+  SecretProvider,
+  { key: string; saving?: Promise<void>; previous?: Promise<void> }
+>();
+
+async function savePendingSecret(provider: SecretProvider): Promise<void> {
+  clearTimeout(secretSaveTimers[provider]);
+  delete secretSaveTimers[provider];
+  const pending = pendingSecrets.get(provider);
+  if (!pending) return;
+  if (pending.saving) return pending.saving;
+  const attempt = (async () => {
+    // A replacement must reach main after its previous write has settled.
+    await pending.previous?.catch(() => {});
+    const save = window.electronAPI?.[SECRET_IPC_SAVERS[provider]] as
+      ((key: string) => Promise<{ success?: boolean } | undefined>) | undefined;
+    if (!save) throw new Error(`Secret persistence unavailable: ${provider}`);
+    const result = await save(pending.key);
+    if (result?.success === false) throw new Error(`Failed to persist secret: ${provider}`);
+    if (pendingSecrets.get(provider) === pending) pendingSecrets.delete(provider);
+  })();
+  pending.saving = attempt;
+  try {
+    await attempt;
+  } finally {
+    pending.saving = undefined;
+  }
+}
+
 function debouncedSaveSecret(provider: SecretProvider, key: string) {
   if (!isBrowser) return;
   debouncedPersistToEnv();
   const timer = secretSaveTimers[provider];
   if (timer) clearTimeout(timer);
+  const previous = pendingSecrets.get(provider);
+  pendingSecrets.set(provider, { key, previous: previous?.saving ?? previous?.previous });
   secretSaveTimers[provider] = setTimeout(() => {
-    const api = window.electronAPI;
-    const save = api?.[SECRET_IPC_SAVERS[provider]] as
-      ((k: string) => Promise<unknown>) | undefined;
-    save?.(key)?.catch((err) => {
+    void savePendingSecret(provider).catch((err) => {
       logger.warn(
         "Failed to persist secret",
         { provider, error: (err as Error).message },
@@ -1649,6 +1701,17 @@ function debouncedSaveSecret(provider: SecretProvider, key: string) {
     });
   }, 250);
 }
+
+registerControlPanelReleaseFlusher(async () => {
+  // Credential draft flushers run first and may enqueue these writes.
+  while (pendingSecrets.size > 0) {
+    await Promise.all([...pendingSecrets.keys()].map(savePendingSecret));
+  }
+  await persistToEnv();
+  if (pendingSecrets.size > 0 || envPersistPending) {
+    throw new Error("Settings changed during close preparation");
+  }
+}, "persistence");
 
 const STALE_SECRET_LOCALSTORAGE_KEYS = [
   "openaiApiKey",

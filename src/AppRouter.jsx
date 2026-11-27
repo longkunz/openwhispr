@@ -5,8 +5,8 @@ import { usePolicyStore } from "./stores/policyStore";
 import { Button } from "./components/ui/button";
 import { isControlPanelWindow } from "./utils/windowContext.ts";
 
-const ControlPanelApp = React.lazy(() => import("./ControlPanelApp.jsx"));
-const DictationApp = React.lazy(() => import("./DictationApp.jsx"));
+const ControlPanelApp = React.lazy(() => import("./ControlPanelApp"));
+const DictationApp = React.lazy(() => import("./DictationApp"));
 const PermissionGuideOverlay = React.lazy(() =>
   import("./components/onboarding/PermissionGuideOverlay").then((module) => ({
     default: module.PermissionGuideOverlay,

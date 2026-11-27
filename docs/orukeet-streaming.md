@@ -35,7 +35,7 @@ The rollout applies to dictation. Local Orukeet, meetings and existing BYOK prov
 
 ## Validation and rollout
 
-Automated tests cover real WebSocket transport, the registered Electron IPC handlers, startup buffering, token authentication, endpoint pinning, allowance and policy denials, account changes, cancellation, duplicate finals, silence, capture flush ordering, retry and timeout. [Streaming benchmark results](orukeet-benchmarks.md) report the deployed infrastructure measurements separately from desktop tests.
+Automated tests cover real WebSocket transport, the registered Electron IPC handlers, startup buffering, token authentication, endpoint pinning, allowance and policy denials, account changes, cancellation, duplicate finals, silence, capture flush ordering, retry and timeout. The operator benchmark uses `scripts/benchmark-orukeet.cjs` and `scripts/lib/orukeet-session.cjs`; write generated receipts outside the repository.
 
 Before enabling the flag, accept the private backend route and metering, then verify microphone, hotkey, cleanup and single-paste behavior on signed macOS, Windows and Linux release builds. Automated Electron-boundary tests do not claim native OS acceptance. Roll back by restoring the previous `streamingProvider`; let active recordings finish. Track setup, stop-to-final, release-to-paste, queue time and fallback rate separately.
 

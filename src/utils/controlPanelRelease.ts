@@ -1,6 +1,6 @@
 // Renderer-owned work must opt in before the main process can release this window.
 const guards = new Set<() => boolean>();
-const flushers = new Set<() => Promise<void>>();
+const flushers = new Map<() => Promise<void>, "drafts" | "persistence">();
 let activeTasks = 0;
 
 export function registerControlPanelReleaseGuard(guard: () => boolean): () => void {
@@ -10,8 +10,11 @@ export function registerControlPanelReleaseGuard(guard: () => boolean): () => vo
   };
 }
 
-export function registerControlPanelReleaseFlusher(flush: () => Promise<void>): () => void {
-  flushers.add(flush);
+export function registerControlPanelReleaseFlusher(
+  flush: () => Promise<void>,
+  phase: "drafts" | "persistence" = "drafts"
+): () => void {
+  flushers.set(flush, phase);
   return () => {
     flushers.delete(flush);
   };
@@ -33,7 +36,12 @@ function canRelease(): boolean {
 export async function prepareControlPanelRelease(): Promise<boolean> {
   try {
     if (!canRelease()) return false;
-    for (const flush of flushers) await flush();
+    // Drafts can enqueue debounced writes, so persistence must run after every draft flusher.
+    for (const phase of ["drafts", "persistence"] as const) {
+      for (const [flush, registeredPhase] of flushers) {
+        if (registeredPhase === phase) await flush();
+      }
+    }
     return canRelease();
   } catch {
     // A failed save keeps its window and draft alive for retry.

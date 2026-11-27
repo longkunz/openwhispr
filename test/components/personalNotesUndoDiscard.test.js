@@ -72,6 +72,7 @@ const MOCKS = {
     export const revealContainer = () => {};
     export const createFolder = async () => ({ success: false });
     export const getNoteFromStore = () => note();
+    export const wasNoteDeletedHere = () => false;
     export const markNoteEdited = (id) => globalThis.__editedNotes?.push(id);
   `,
 };
@@ -112,11 +113,95 @@ async function mountView(t, updateNote) {
   // Re-renders with the store's current note (globalThis.__note).
   Object.defineProperty(calls, "rerender", { value: render });
   Object.defineProperty(calls, "vite", { value: vite });
+  Object.defineProperty(calls, "unmount", {
+    value: async () => {
+      await React.act(async () => root.unmount());
+      root = null;
+    },
+  });
   return calls;
 }
 
 const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const saves = (calls) => calls.filter(([kind]) => kind === "save");
+
+test("a failed autosave is retried after navigating away from Notes", async (t) => {
+  let success = false;
+  const calls = await mountView(t, () => ({ success }));
+  const { prepareControlPanelRelease } = await calls.vite.ssrLoadModule(
+    "/utils/controlPanelRelease.ts"
+  );
+  await React.act(async () =>
+    globalThis.__editorProps.onContentChange(NOTE.id, "Keep after navigation")
+  );
+  await React.act(() => settle(1100));
+  await calls.unmount();
+  assert.equal(await prepareControlPanelRelease(), false, "failed saves outlive the Notes view");
+  success = true;
+  assert.equal(await prepareControlPanelRelease(), true);
+  assert.deepEqual(saves(calls).at(-1), [
+    "save",
+    NOTE.id,
+    { title: NOTE.title, content: "Keep after navigation" },
+  ]);
+});
+
+test("an idle panel retries a failed autosave before releasing", async (t) => {
+  let success = false;
+  const calls = await mountView(t, () => ({ success }));
+  const { prepareControlPanelRelease } = await calls.vite.ssrLoadModule(
+    "/utils/controlPanelRelease.ts"
+  );
+  await React.act(async () => globalThis.__editorProps.onContentChange(NOTE.id, "Retry me"));
+  await React.act(() => settle(1100));
+  assert.equal(await prepareControlPanelRelease(), false);
+  success = true;
+  assert.equal(await prepareControlPanelRelease(), true);
+  assert.deepEqual(saves(calls).at(-1), [
+    "save",
+    NOTE.id,
+    { title: NOTE.title, content: "Retry me" },
+  ]);
+});
+
+test("a store rerender cannot replace the draft after an autosave failure", async (t) => {
+  let success = false;
+  const calls = await mountView(t, () => ({ success }));
+  await React.act(async () => globalThis.__editorProps.onContentChange(NOTE.id, "Keep my draft"));
+  await React.act(() => settle(1100));
+  globalThis.__note = { ...NOTE, title: "Store update" };
+  await calls.rerender();
+  assert.equal(globalThis.__editorProps.note.content, "Keep my draft");
+  success = true;
+  const { prepareControlPanelRelease } = await calls.vite.ssrLoadModule(
+    "/utils/controlPanelRelease.ts"
+  );
+  assert.equal(await prepareControlPanelRelease(), true);
+});
+
+test("a successful title save also recovers an earlier failed content autosave", async (t) => {
+  let success = false;
+  const calls = await mountView(t, (id, updates) => ({
+    success,
+    note: { ...NOTE, ...updates },
+  }));
+  const { prepareControlPanelRelease } = await calls.vite.ssrLoadModule(
+    "/utils/controlPanelRelease.ts"
+  );
+  await React.act(async () => globalThis.__editorProps.onContentChange(NOTE.id, "Recovered body"));
+  await React.act(() => settle(1100));
+  success = true;
+  await React.act(async () => globalThis.__editorProps.onTitleChange(NOTE.id, "Recovered title"));
+  await React.act(() => settle(1100));
+  assert.deepEqual(saves(calls).at(-1), [
+    "save",
+    NOTE.id,
+    { title: "Recovered title", content: "Recovered body" },
+  ]);
+  assert.equal(globalThis.__editorProps.note.content, "Recovered body");
+  assert.equal(await prepareControlPanelRelease(), true);
+  assert.equal(saves(calls).length, 2, "a successful recovery must retire the failed write");
+});
 
 test("a failed close flush retains its draft and retries before release", async (t) => {
   let success = false;

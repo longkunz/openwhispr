@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConnectionAutoCheck } from "./useConnectionAutoCheck";
+import { registerControlPanelReleaseFlusher } from "../utils/controlPanelRelease";
 
 type Drafts = Record<string, { value: string; save: (value: string) => void }>;
 
@@ -73,6 +74,10 @@ export function useCredentialDraft() {
 
   // Unmounting fires no blur, as when Escape closes Settings.
   useEffect(() => () => settle(Object.keys(latest.current)), [settle]);
+  useEffect(
+    () => registerControlPanelReleaseFlusher(async () => settle(Object.keys(latest.current))),
+    [settle]
+  );
 
   const save = useCallback(() => {
     const field = editing.current;

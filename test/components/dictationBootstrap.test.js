@@ -38,7 +38,7 @@ for (const panel of [false, true]) {
           "react-i18next": `export const useTranslation = () => ({ t: key => key });`,
           "/App.jsx": `export default function App() { return "dictation-ready"; }`,
           ...(!panel
-            ? { "/ControlPanelApp.jsx": `throw new Error("control panel must remain unloaded");` }
+            ? { "/ControlPanelApp.tsx": `throw new Error("control panel must remain unloaded");` }
             : {}),
           "/components/ControlPanel": `export default function ControlPanel() { return "panel-ready"; }`,
           "/hooks/useControlPanelWindowDrag": `export function useControlPanelWindowDrag() {}`,
@@ -55,7 +55,7 @@ for (const panel of [false, true]) {
         },
       });
       const { default: AppRouter } = await vite.ssrLoadModule("/AppRouter.jsx");
-      await vite.ssrLoadModule(panel ? "/ControlPanelApp.jsx" : "/DictationApp.jsx");
+      await vite.ssrLoadModule(panel ? "/ControlPanelApp.tsx" : "/DictationApp.tsx");
       const expected = panel ? "panel-ready" : "dictation-ready";
       root = createRoot(container);
       await React.act(async () => root.render(React.createElement(AppRouter)));
