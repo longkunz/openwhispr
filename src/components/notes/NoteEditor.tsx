@@ -10,8 +10,7 @@ import {
   Sparkles,
   AlignLeft,
   MessageSquareText,
-  Link2,
-  Lock,
+  Download,
   FolderOpen,
   Search,
   Plus,
@@ -21,7 +20,6 @@ import {
   Users,
   AlertTriangle,
 } from "../icons";
-import ShareNoteDialog, { type NoteExportOption } from "./ShareNoteDialog";
 import { reconcileLocalShareState } from "./shareNoteRules";
 import {
   canOrganizeNote,
@@ -62,11 +60,6 @@ import {
 } from "../ui/dropdown-menu";
 import { cn } from "../lib/utils";
 import { PAGE_CONTENT_WIDTH_CLASS } from "../ui/pageWidth";
-import {
-  SPLIT_BUTTON_DIVIDER_CLASS,
-  SPLIT_BUTTON_GROUP_CLASS,
-  SPLIT_BUTTON_SEGMENT_CLASS,
-} from "../ui/splitButton";
 import type { CalendarEvent } from "../../types/calendar";
 import type { NoteItem, FolderItem, ActionItem, ActionKind } from "../../types/electron";
 import type { ActionProcessingState } from "../../hooks/useActionProcessing";
@@ -311,8 +304,7 @@ export default function NoteEditor({
     note.note_type === "upload" && !!note.transcript && !note.content.trim();
   const defaultViewMode: MeetingViewMode = opensOnTranscript ? "transcript" : "raw";
   const [selectedViewMode, setSelectedViewMode] = useState<MeetingViewMode>(defaultViewMode);
-  const viewMode: MeetingViewMode =
-    selectedViewMode === "enhanced" ? "raw" : selectedViewMode;
+  const viewMode: MeetingViewMode = selectedViewMode === "enhanced" ? "raw" : selectedViewMode;
   const [chatMode, setChatMode] = useState<EmbeddedChatMode>("hidden");
   const [chatDraft, setChatDraft] = useState("");
   const closeChat = useCallback(() => {
@@ -328,8 +320,6 @@ export default function NoteEditor({
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [isDiarizing, setIsDiarizing] = useState(false);
-  const [shareDialogOpen, setShareDialogOpen] = useState(false);
-  const [shareIntent, setShareIntent] = useState<"open" | "copy-link">("open");
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
   const [aclRetryVersion, setAclRetryVersion] = useState(0);
   const [aclRequest, setAclRequest] = useState<{
@@ -344,9 +334,6 @@ export default function NoteEditor({
     [spaces, note.space_id]
   );
   const isTeamNote = space?.kind === "team";
-  // Persisted flag is the restart-safe truth; the live cache overlays it for
-  // the current session (it reflects server state before the flag persists).
-  const isShared = shareCache ? shareCache.share.visibility !== "private" : Boolean(note.is_shared);
   const aclState: NoteAclState = shareCache
     ? "loaded"
     : !note.cloud_id || !isSignedIn
@@ -1089,12 +1076,7 @@ export default function NoteEditor({
   const noteDate = formatNoteDate(note.created_at, locale);
   const shortDate = formatShortDate(note.created_at, locale);
 
-  const openShare = useCallback((intent: "open" | "copy-link") => {
-    setShareIntent(intent);
-    setShareDialogOpen(true);
-  }, []);
-
-  const exportOptions = useMemo<NoteExportOption[]>(() => {
+  const exportOptions = useMemo(() => {
     if (viewMode === "transcript" && onExportTranscript) {
       return (["txt", "srt", "md", "json"] as const).map((format) => ({
         id: format,
@@ -1360,25 +1342,24 @@ export default function NoteEditor({
                 />
               )}
               {canEditNote && isRecording && <MicMuteButton />}
-              <div className={cn(SPLIT_BUTTON_GROUP_CLASS, "h-[30px] shrink-0")}>
-                <button
-                  type="button"
-                  onClick={() => openShare("open")}
-                  className={cn(SPLIT_BUTTON_SEGMENT_CLASS, "gap-1.5 ps-2.5 pe-3")}
-                >
-                  <Lock size={13} className={isShared ? "text-primary" : "text-foreground/60"} />
-                  {t("noteEditor.share.button")}
-                </button>
-                <span aria-hidden="true" className={SPLIT_BUTTON_DIVIDER_CLASS} />
-                <button
-                  type="button"
-                  onClick={() => openShare("copy-link")}
-                  aria-label={t("noteEditor.share.dialog.copyLink")}
-                  className={cn(SPLIT_BUTTON_SEGMENT_CLASS, "w-[30px] justify-center")}
-                >
-                  <Link2 size={13} className="text-foreground/60" />
-                </button>
-              </div>
+              {exportOptions.length > 0 && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-[30px] shrink-0">
+                      <Download size={13} aria-hidden="true" />
+                      {t("notes.editor.export")}
+                      <ChevronDown size={12} aria-hidden="true" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {exportOptions.map((option) => (
+                      <DropdownMenuItem key={option.id} onSelect={option.onSelect}>
+                        {option.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           </div>
         </div>
@@ -1638,13 +1619,6 @@ export default function NoteEditor({
           slashCommands={actionCommands}
         />
       )}
-      <ShareNoteDialog
-        open={shareDialogOpen}
-        onOpenChange={setShareDialogOpen}
-        note={note}
-        exportOptions={exportOptions}
-        copyLinkOnOpen={shareIntent === "copy-link"}
-      />
       {isTeamNote && space?.cloud_space_id && (
         <SpaceSettingsDialog
           space={space}

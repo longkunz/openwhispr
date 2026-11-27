@@ -131,7 +131,6 @@ const EXPECTED_NATIVE_FIELD_DIRECTIONS = {
   "src/components/notes/NoteEventPicker.tsx": ["auto"],
   "src/components/notes/NoteParticipants.tsx": ["auto"],
   "src/components/notes/NotesOnboarding.tsx": ["auto", "auto", "auto"],
-  "src/components/notes/ShareNoteDialog.tsx": ["auto"],
   "src/components/notes/SpaceNameField.tsx": ["auto"],
   // A teamspace's name and description, edited in place in the settings header: prose in any script.
   "src/components/notes/SpaceSettingsDialog.tsx": ["auto", "auto"],
@@ -220,10 +219,6 @@ test("representative prose, identity, secret, and rich-editor surfaces keep thei
   assert.match(
     source("src/components/notes/UploadAudioView.tsx"),
     /<input\s+dir="ltr"\s+type="url"/
-  );
-  assert.match(
-    source("src/components/notes/ShareNoteDialog.tsx"),
-    /<input\s+dir="auto"[\s\S]*?placeholder=\{t\("noteEditor\.share\.dialog\.searchPlaceholder"\)\}/
   );
   assert.match(
     source("src/components/ui/ApiKeyInput.tsx"),
