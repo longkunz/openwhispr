@@ -3,6 +3,26 @@ const assert = require("node:assert/strict");
 
 const load = () => import("../../src/lib/noteEditorPendingSave.ts");
 
+test("a newer retry replaces clears only for the fields it edits", async () => {
+  const { mergePendingNoteUpdates } = await load();
+  assert.deepEqual(
+    mergePendingNoteUpdates(
+      {
+        title: "Old",
+        content: "",
+        enhanced_content: "",
+        clear_fields: ["content", "enhanced_content"],
+      },
+      { title: "New", content: "Restored" }
+    ),
+    { title: "New", content: "Restored", enhanced_content: "", clear_fields: ["enhanced_content"] }
+  );
+  assert.deepEqual(
+    mergePendingNoteUpdates({ content: "Old" }, { content: "", clear_fields: ["content"] }),
+    { content: "", clear_fields: ["content"] }
+  );
+});
+
 function note(id, content, enhancedContent = null) {
   return {
     id,

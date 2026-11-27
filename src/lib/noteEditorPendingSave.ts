@@ -41,6 +41,25 @@ export interface PendingNoteWrite {
   readonly updates: PendingNoteUpdates;
 }
 
+// A later edit replaces only the fields it carries; a failed save may still owe other fields.
+export function mergePendingNoteUpdates(
+  previous: PendingNoteUpdates,
+  next: PendingNoteUpdates
+): PendingNoteUpdates {
+  const clearFields = new Set(previous.clear_fields);
+  for (const field of ["content", "enhanced_content"] as const) {
+    if (field in next) clearFields.delete(field);
+  }
+  for (const field of next.clear_fields ?? []) clearFields.add(field);
+  const { clear_fields: _previousClear, ...previousFields } = previous;
+  const { clear_fields: _nextClear, ...nextFields } = next;
+  return {
+    ...previousFields,
+    ...nextFields,
+    ...(clearFields.size > 0 && { clear_fields: [...clearFields] }),
+  };
+}
+
 interface NoteDraftSource {
   readonly id: number;
   readonly title: string;

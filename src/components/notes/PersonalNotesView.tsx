@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   holdControlPanel,
   registerControlPanelReleaseFlusher,
-  registerControlPanelReleaseGuard,
 } from "../../utils/controlPanelRelease";
 import { useTranslation } from "react-i18next";
 import { Plus } from "../icons";
@@ -75,6 +74,11 @@ import {
   type PendingEnhancedSnapshot,
   type PendingNoteWrite,
 } from "../../lib/noteEditorPendingSave";
+import {
+  cancelPendingNoteWrite,
+  hasPendingNoteWrite,
+  persistNoteWrite,
+} from "../../lib/pendingNoteWrites";
 
 function makeContentHash(content: string): string {
   return String(content.length) + "-" + content.slice(0, 50);
@@ -149,8 +153,6 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
   const [showAddNotesDialog, setShowAddNotesDialog] = useState(false);
   const pendingDocumentRef = useRef<PendingDocumentSave | null>(null);
   const pendingEnhancedRef = useRef<PendingEnhancedSave | null>(null);
-  const failedAutosaveRef = useRef(false);
-  useEffect(() => registerControlPanelReleaseGuard(() => !failedAutosaveRef.current), []);
   // The open note's last stored row and the account it was opened under: where a copy goes, and
   // for whom, should the note vanish before a save lands (see rescueLostNoteWrite).
   const openNoteRowRef = useRef<NoteItem | null>(null);
@@ -226,12 +228,12 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
   // with a teamspace the user lost) would drop what was typed since the last save. Those edits
   // go to a new note in Private instead, unless the note was deleted here.
   const rescueLostNoteWrite = useCallback(
-    async (write: PendingNoteWrite, context: LostNoteContext, error?: string): Promise<void> => {
+    async (write: PendingNoteWrite, context: LostNoteContext, error?: string): Promise<boolean> => {
       const api = window.electronAPI;
       const row = await api.getNote(write.noteId).catch(() => undefined);
       if (row === undefined || (row && !row.deleted_at) || wasNoteDeletedHere(write.noteId)) {
         logger.warn("Note save refused", { noteId: write.noteId, error }, "notes");
-        return;
+        return wasNoteDeletedHere(write.noteId);
       }
       // The note being recorded: the edits join the copy the recording goes on in.
       const recordingCopyId = await rescueRecordingNote(write.noteId);
@@ -240,7 +242,7 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
         if (!result?.success) {
           logger.warn("Failed to save edits to a recording's new note", { error }, "notes");
         }
-        return;
+        return !!result?.success;
       }
       const copies = lostNoteCopiesRef.current;
       const earlier = copies.get(write.noteId);
@@ -250,11 +252,11 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
         if (!result?.success) {
           logger.warn("Failed to save edits to a vanished note's copy", { error }, "notes");
         }
-        return;
+        return !!result?.success;
       }
       if (!carriesTypedText(write.updates)) {
         logger.warn("Note save refused", { noteId: write.noteId, error }, "notes");
-        return;
+        return false;
       }
       // The first refusal, or the earlier copy failed: this write makes the copy.
       const attempt = copyLostNote(write, context);
@@ -263,7 +265,7 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
       if (!copy) {
         if (copies.get(write.noteId) === attempt) copies.delete(write.noteId);
         logger.warn("Could not save a vanished note's edits", { noteId: write.noteId }, "notes");
-        return;
+        return false;
       }
       toast({
         title: t("notes.editor.lostNoteCopy.title"),
@@ -273,6 +275,7 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
         duration: 10000,
         actions: [{ label: t("notes.editor.lostNoteCopy.open"), onClick: () => openNote(copy) }],
       });
+      return true;
     },
     [copyLostNote, t, toast]
   );
@@ -280,19 +283,14 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
   // Sends a save; one refused because its note is gone has its edits rescued.
   const writePendingSave = useCallback(
     async (write: PendingNoteWrite): Promise<NoteMutationResult | null> => {
-      const release = holdControlPanel();
-      try {
-        const context = lostNoteContext(write.noteId);
-        const result = await window.electronAPI.updateNote(write.noteId, write.updates);
-        if (!result?.success) failedAutosaveRef.current = true;
-        if (result && !result.success) await rescueLostNoteWrite(write, context, result.error);
-        return result ?? null;
-      } catch (error) {
-        failedAutosaveRef.current = true;
-        throw error;
-      } finally {
-        release();
-      }
+      const context = lostNoteContext(write.noteId);
+      return persistNoteWrite(write, async (pending) => {
+        const result = await window.electronAPI.updateNote(pending.noteId, pending.updates);
+        const saved =
+          result?.success ||
+          (result && (await rescueLostNoteWrite(pending, context, result.error)));
+        return saved ? { ...result, success: true } : (result ?? null);
+      });
     },
     [lostNoteContext, rescueLostNoteWrite]
   );
@@ -301,6 +299,7 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
   // debounced save would clobber it with the pre-refresh buffer, so the
   // editor cancels pending saves for that note before the copy is applied.
   const cancelPendingSaves = useCallback((noteId: number) => {
+    cancelPendingNoteWrite(noteId);
     const document = pendingDocumentRef.current;
     if (document?.noteId === noteId) {
       clearTimeout(document.timer);
@@ -316,30 +315,34 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
   // Conflict-banner Keep saves the note's pending edits before advancing the
   // base. They stay pending until written, so a failed save is retried by its
   // own timer and the draft is never replaced by the store copy meanwhile.
-  const savePendingNow = useCallback(async (noteId: number) => {
-    const release = holdControlPanel();
-    try {
-      const document =
-        pendingDocumentRef.current?.noteId === noteId ? pendingDocumentRef.current : null;
-      const enhanced =
-        pendingEnhancedRef.current?.noteId === noteId ? pendingEnhancedRef.current : null;
-      for (const write of collectPendingNoteWrites(document, enhanced)) {
-        const result = await window.electronAPI.updateNote(write.noteId, write.updates);
-        if (!result?.success) throw new Error(result?.error ?? "Note save failed");
+  const savePendingNow = useCallback(
+    async (noteId: number) => {
+      const release = holdControlPanel();
+      try {
+        const document =
+          pendingDocumentRef.current?.noteId === noteId ? pendingDocumentRef.current : null;
+        const enhanced =
+          pendingEnhancedRef.current?.noteId === noteId ? pendingEnhancedRef.current : null;
+        for (const write of collectPendingNoteWrites(document, enhanced)) {
+          const result = await writePendingSave(write);
+          if (hasPendingNoteWrite(write.noteId))
+            throw new Error(result?.error ?? "Note save failed");
+        }
+        // Retire only the saves just written; an edit made meanwhile stays pending.
+        if (document && pendingDocumentRef.current === document) {
+          clearTimeout(document.timer);
+          pendingDocumentRef.current = null;
+        }
+        if (enhanced && pendingEnhancedRef.current === enhanced) {
+          clearTimeout(enhanced.timer);
+          pendingEnhancedRef.current = null;
+        }
+      } finally {
+        release();
       }
-      // Retire only the saves just written; an edit made meanwhile stays pending.
-      if (document && pendingDocumentRef.current === document) {
-        clearTimeout(document.timer);
-        pendingDocumentRef.current = null;
-      }
-      if (enhanced && pendingEnhancedRef.current === enhanced) {
-        clearTimeout(enhanced.timer);
-        pendingEnhancedRef.current = null;
-      }
-    } finally {
-      release();
-    }
-  }, []);
+    },
+    [writePendingSave]
+  );
 
   const takePendingSnapshots = useCallback((): {
     document: PendingDocumentSnapshot | null;
@@ -519,7 +522,8 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
     openNoteRowRef.current = activeNote;
     const hasPendingLocalSave =
       pendingDocumentRef.current?.noteId === activeNote.id ||
-      pendingEnhancedRef.current?.noteId === activeNote.id;
+      pendingEnhancedRef.current?.noteId === activeNote.id ||
+      hasPendingNoteWrite(activeNote.id);
     if (!hasPendingLocalSave) {
       // External update (e.g. AI chat tool) — replace the complete draft only
       // when it has no local save pending.
@@ -537,7 +541,8 @@ export default function PersonalNotesView({ onOpenSettings }: PersonalNotesViewP
         saved.id !== noteId ||
         draftRef.current?.noteId !== noteId ||
         pendingDocumentRef.current?.noteId === noteId ||
-        pendingEnhancedRef.current?.noteId === noteId
+        pendingEnhancedRef.current?.noteId === noteId ||
+        hasPendingNoteWrite(noteId)
       )
         return;
       commitDraft(draftFromNote(saved));

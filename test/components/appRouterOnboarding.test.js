@@ -76,8 +76,8 @@ async function createRouterHarness(t, initialStorage = {}, search = "?panel=true
   });
   const { default: AppRouter } = await vite.ssrLoadModule("/AppRouter.jsx");
   await Promise.all([
-    vite.ssrLoadModule("/ControlPanelApp.jsx"),
-    vite.ssrLoadModule("/DictationApp.jsx"),
+    vite.ssrLoadModule("/ControlPanelApp.tsx"),
+    vite.ssrLoadModule("/DictationApp.tsx"),
     vite.ssrLoadModule("/components/onboarding/PermissionGuideOverlay"),
     vite.ssrLoadModule("/components/MeetingNotificationOverlay.tsx"),
     vite.ssrLoadModule("/components/agent/AgentWindow.tsx"),
