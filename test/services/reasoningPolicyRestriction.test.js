@@ -2,10 +2,9 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createRendererServer, installBrowserGlobals } = require("../lib/rendererTestHarness");
 
-const esTranslations = require("../../src/locales/es/translation.json");
 const enTranslations = require("../../src/locales/en/translation.json");
 
-test("reasoning policy asserts throw messages localized to the active UI language", async (t) => {
+test("reasoning policy refusals stay English for legacy locale requests", async (t) => {
   installBrowserGlobals(t);
   const vite = await createRendererServer(t, {
     cachePrefix: "openwhispr-reasoning-policy-test-",
@@ -36,17 +35,13 @@ test("reasoning policy asserts throw messages localized to the active UI languag
   });
 
   await i18n.changeLanguage("es");
-  assert.notEqual(
-    esTranslations.common.policyAgentRestricted,
-    enTranslations.common.policyAgentRestricted,
-    "the localized strings must differ so this test can prove translation happened"
-  );
+  assert.equal(i18n.language, "en", "legacy locale requests fall back to the English-only UI");
 
   assert.throws(() => assertAgentAllowedByPolicy(), {
-    message: esTranslations.common.policyAgentRestricted,
+    message: enTranslations.common.policyAgentRestricted,
   });
   assert.throws(() => assertReasoningAllowedByPolicy("openai", "providers"), {
-    message: esTranslations.common.policyAiProcessingRestricted,
+    message: enTranslations.common.policyAiProcessingRestricted,
   });
 
   await i18n.changeLanguage("en");

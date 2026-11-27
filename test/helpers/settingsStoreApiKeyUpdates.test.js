@@ -23,7 +23,7 @@ const bindings = [
   ].map(([storeKey, get]) => ({ storeKey, get })),
 ];
 
-async function loadSettings(t, overrides = {}) {
+async function loadSettings(t, overrides = {}, preloadReasoning = true) {
   const keys = new Map(bindings.map(({ storeKey }) => [storeKey, `old-${storeKey}`]));
   const events = new EventTarget();
   let update;
@@ -51,18 +51,30 @@ async function loadSettings(t, overrides = {}) {
   installMicCaptureGlobals(t);
   const vite = await createRendererServer(t, {
     mockModules: {
-      "/services/ReasoningService":
-        "export default { clearApiKeyCache: (...args) => window.cacheClears.push(args) };",
+      "/services/ReasoningService": `import { registerReasoningCache } from "/services/reasoningCache.ts";
+        window.reasoningLoads = (window.reasoningLoads ?? 0) + 1;
+        const service = { clearApiKeyCache: (...args) => window.cacheClears.push(args) };
+        registerReasoningCache((...args) => service.clearApiKeyCache(...args));
+        export default service;`,
       "/utils/logger": `export default {
         debug() {}, info() {}, error() {}, logReasoning() {},
         warn: (...args) => window.warnings.push(args)
       };`,
     },
   });
-  await vite.ssrLoadModule("/services/ReasoningService");
+  if (preloadReasoning) await vite.ssrLoadModule("/services/ReasoningService");
   const settings = await vite.ssrLoadModule("/stores/settingsStore.ts");
   return { ...settings, keys, storage, window, vite, update: (key) => update(key) };
 }
+
+test("a key update in an idle float does not load reasoning SDKs just to clear an empty cache", async (t) => {
+  const context = await loadSettings(t, {}, false);
+  await context.initializeSettings();
+  context.keys.set("openaiApiKey", "changed");
+  await context.update("openaiApiKey");
+  assert.equal(context.useSettingsStore.getState().openaiApiKey, "changed");
+  assert.equal(context.window.reasoningLoads ?? 0, 0);
+});
 
 test("all registered secrets refresh in memory without persistence or save loops", async (t) => {
   const context = await loadSettings(t);

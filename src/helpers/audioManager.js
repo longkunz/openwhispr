@@ -3,7 +3,7 @@ import { requestSelfHostedBatch } from "./selfHostedBatchRequest";
 import { refreshEnterpriseIdentityForUse } from "../stores/enterpriseIdentityStore.ts";
 import { selfHostedSttRequest } from "./selfHostedSttHeaders.js";
 import i18n from "../i18n";
-import ReasoningService from "../services/ReasoningService";
+import ReasoningService from "./lazyReasoningService";
 import {
   EMPTY_OUTPUT_MESSAGE_KEY,
   TRUNCATED_OUTPUT_MESSAGE_KEY,
@@ -143,12 +143,12 @@ import {
   resolveDictationAgentInference,
   resolveDictationAgentVisionInference,
 } from "./dictationAgentInference";
-import { providerSupportsImages } from "../services/ai/inferenceProviders";
+import { providerSupportsImages } from "../services/ai/providerImageCapabilities";
 import { resolveDictationTranslationInference } from "./dictationTranslationInference";
 import { resolvePrompt, appendScreenContextSuffix } from "../config/prompts";
 import { resolveDictationToneStyle } from "../config/toneStyle";
 import { selectionEditToneSentence } from "../config/prompts/toneStyle";
-import { syncService } from "../services/SyncService.js";
+import { syncTranscriptionAfterLocalWrite } from "../services/syncAfterLocalWrite";
 import { evaluateFinishedRecording, withSalvageWarning } from "./recordingValidation";
 import { isEmptyRecording } from "./recordingGuard";
 import { startRecordingSpool, takeInterruptedRecordings } from "./recordingSpool";
@@ -3151,6 +3151,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
       // would drop the selection-edit instructions and completion marker.
       // rawScreenContext/selectionEditReachable are routing-only keys (see
       // processAgentCommand) — keep the retry config clean of them too.
+      if (error?.name === "AbortError") throw error;
       if (config?.screenContext) {
         const {
           screenContext,
@@ -5051,7 +5052,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         routeKind: this.translationRequested ? "translation" : null,
         analyticsOccurredAt: occurredAt.toISOString(),
       });
-      if (result?.id) syncService.debouncedPush("transcription", result.id);
+      if (result?.id) syncTranscriptionAfterLocalWrite(result.id);
 
       // Save audio if we have a captured blob and the transcription was saved successfully
       if (result?.id && this.lastAudioBlob) {
@@ -5168,7 +5169,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         });
       }
 
-      syncService.debouncedPush("transcription", savedId);
+      syncTranscriptionAfterLocalWrite(savedId);
     } catch (error) {
       logger.error(
         "Failed to save discarded transcription record",
@@ -5239,7 +5240,7 @@ registerProcessor("pcm-streaming-processor", PCMStreamingProcessor);
         { durationMs, provider: null, model: null }
       );
       if (!audioResult?.success) throw new Error("Failed to save recovered audio");
-      syncService.debouncedPush("transcription", savedId);
+      syncTranscriptionAfterLocalWrite(savedId);
       logger.info("Recovered interrupted recording", { id: savedId, durationMs }, "audio");
       return true;
     } catch (error) {

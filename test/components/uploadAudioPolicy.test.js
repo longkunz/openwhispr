@@ -7,7 +7,7 @@ const ts = require("typescript");
 const { deferred } = require("../helpers/harness/deferred");
 const { audioFeatureFailure } = require("../../src/helpers/audioFeaturePolicy");
 const { i18nMain, changeLanguage } = require("../../src/helpers/i18nMain");
-const esTranslation = require("../../src/locales/es/translation.json");
+const esTranslation = require("../../src/locales/en/translation.json");
 const { uploadRestrictionKey } = require("../../src/components/notes/shared.ts");
 
 const source = ts.createSourceFile(
@@ -126,7 +126,7 @@ for (const phase of ["title", "save"]) {
   });
 }
 
-test("main policy refusals appear in Spanish upload errors", async (t) => {
+test("main policy refusals appear in English upload errors", async (t) => {
   const previousLanguage = i18nMain.language;
   changeLanguage("es");
   t.after(() => changeLanguage(previousLanguage));

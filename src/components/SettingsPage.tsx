@@ -199,20 +199,6 @@ interface SettingsPageProps {
 
 const PERSONAL_BILLING_REQUEST: PlansBillingRequest = { kind: "personal" };
 
-const UI_LANGUAGE_OPTIONS: import("./ui/LanguageSelector").LanguageOption[] = [
-  { value: "en", label: "English", flag: "🇺🇸" },
-  { value: "ar", label: "العربية", flag: "🇦🇪" },
-  { value: "es", label: "Español", flag: "🇪🇸" },
-  { value: "fr", label: "Français", flag: "🇫🇷" },
-  { value: "de", label: "Deutsch", flag: "🇩🇪" },
-  { value: "pt", label: "Português", flag: "🇵🇹" },
-  { value: "it", label: "Italiano", flag: "🇮🇹" },
-  { value: "ru", label: "Русский", flag: "🇷🇺" },
-  { value: "ja", label: "日本語", flag: "🇯🇵" },
-  { value: "zh-CN", label: "简体中文", flag: "🇨🇳" },
-  { value: "zh-TW", label: "繁體中文", flag: "🇹🇼" },
-];
-
 const RETENTION_DAY_OPTIONS = [1, 7, 14, 30, 60, 90];
 
 const RETENTION_SELECT_CLASS =
@@ -598,7 +584,6 @@ export default function SettingsPage({
     localTranscriptionProvider,
     parakeetModel,
     cohereModel,
-    uiLanguage,
     preferredLanguage,
     chineseScriptPreference,
     cloudTranscriptionProvider,
@@ -616,7 +601,6 @@ export default function SettingsPage({
     setSelectedMicDevice,
     setMicWarmHoldSeconds,
     setUseLocalWhisper,
-    setUiLanguage,
     setWhisperModel,
     setLocalTranscriptionProvider,
     setParakeetModel,
@@ -1889,19 +1873,6 @@ export default function SettingsPage({
                 description={t("settings.language.sectionDescription")}
               />
               <SettingsPanel>
-                <SettingsPanelRow>
-                  <SettingsRow
-                    label={t("settings.language.uiLabel")}
-                    description={t("settings.language.uiDescription")}
-                  >
-                    <LanguageSelector
-                      value={uiLanguage}
-                      onChange={setUiLanguage}
-                      options={UI_LANGUAGE_OPTIONS}
-                      className="min-w-32"
-                    />
-                  </SettingsRow>
-                </SettingsPanelRow>
                 <SettingsPanelRow>
                   <SettingsRow
                     label={t("settings.language.transcriptionLabel")}

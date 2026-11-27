@@ -4,6 +4,26 @@ const { createRendererServer, installBrowserGlobals } = require("../lib/renderer
 
 const MARKER_RE = /__OPENWHISPR_SELECTION_COMPLETE_[0-9a-f-]+/;
 
+test("cancelling reasoning never retries a screenshot as a new text-only request", async (t) => {
+  const { setProcessText, createManager } = await loadAudioManager(t, {
+    cachePrefix: "openwhispr-cancel-lazy-reasoning-",
+    settingsKey: "__cancelLazySettings",
+    reasoningKey: "__cancelLazyProcess",
+  });
+  let calls = 0;
+  setProcessText(async () => {
+    calls++;
+    throw new DOMException("Cancelled", "AbortError");
+  });
+  await assert.rejects(
+    createManager().processWithReasoningModel("text", "model", "Agent", {
+      screenContext: { mediaType: "image/jpeg", data: "fixture" },
+    }),
+    { name: "AbortError" }
+  );
+  assert.equal(calls, 1);
+});
+
 // audioManager pulls in the whole renderer graph; ReasoningService is routed
 // through a globalThis slot so each test can script its responses.
 async function loadAudioManager(t, { cachePrefix, settingsKey, reasoningKey }) {

@@ -8,7 +8,6 @@ import { useWindowDrag } from "./hooks/useWindowDrag";
 import { useLinuxPillInteractivity } from "./hooks/useLinuxPillInteractivity";
 import { useWindowsPillShape } from "./hooks/useWindowsPillShape";
 import { useAudioRecording } from "./hooks/useAudioRecording";
-import { useOnboardingAssistantDemo } from "./hooks/useOnboardingAssistantDemo";
 import { useLiveTranscriptPanel } from "./hooks/useLiveTranscriptPanel";
 import { useMainWindowSizeOwner } from "./hooks/useMainWindowSizeOwner";
 import { useMainProcessNotifications } from "./hooks/useMainProcessNotifications";
@@ -158,13 +157,6 @@ export default function App() {
     if (localStorage.getItem("onboardingCompleted") === "true") return;
     window.electronAPI?.publishOnboardingDemoEvent?.(event);
   }, []);
-  const runOnboardingAssistantDemo = useOnboardingAssistantDemo(
-    useCallback(
-      (event) => publishOnboardingDemoEvent({ ...event, kind: "assistant" }),
-      [publishOnboardingDemoEvent]
-    )
-  );
-
   const handleDictationError = React.useCallback(() => {
     liveTranscriptApiRef.current?.dismissForError();
   }, []);
@@ -179,7 +171,6 @@ export default function App() {
   const recording = useAudioRecording(toast, {
     onToggle: handleDictationToggle,
     onDemoEvent: publishOnboardingDemoEvent,
-    onOnboardingAssistantCommand: runOnboardingAssistantDemo,
     dismissDictationError,
     onDictationError: handleDictationError,
     onShowTranscript: (text) => liveTranscriptApiRef.current?.showFinalText(text),

@@ -146,9 +146,12 @@ test("retired Tinfoil streaming selections preserve replacement model temperatur
 test("Tinfoil image input remains unwired in the shared dictation/chat capability gate", async (t) => {
   installBrowserGlobals(t);
   const vite = await createRendererServer(t);
-  const { providerSupportsImages } = await vite.ssrLoadModule(
+  const { providerSupportsImages, PROVIDER_REGISTRY } = await vite.ssrLoadModule(
     "/services/ai/inferenceProviders/index.ts"
   );
   assert.equal(providerSupportsImages("tinfoil"), false);
   assert.equal(providerSupportsImages("openai"), true);
+  for (const [id, provider] of Object.entries(PROVIDER_REGISTRY)) {
+    assert.equal(providerSupportsImages(id), Boolean(provider.supportsImages), id);
+  }
 });

@@ -4,7 +4,7 @@ const React = require("react");
 const { createRoot } = require("react-dom/client");
 const { audioFeatureFailure } = require("../../src/helpers/audioFeaturePolicy");
 const { i18nMain, changeLanguage } = require("../../src/helpers/i18nMain");
-const esTranslation = require("../../src/locales/es/translation.json");
+const esTranslation = require("../../src/locales/en/translation.json");
 const { deferred } = require("../helpers/harness/deferred");
 const {
   createRendererServer,
@@ -158,7 +158,7 @@ test("the 30-second save skips a note deleted mid-recording", async (t) => {
   assert.deepEqual(savedTranscripts(), [], "a deleted note is not written back");
 });
 
-test("a main policy refusal appears in a Spanish meeting-start toast", async (t) => {
+test("a main policy refusal appears in a English meeting-start toast", async (t) => {
   const previousLanguage = i18nMain.language;
   changeLanguage("es");
   t.after(() => changeLanguage(previousLanguage));

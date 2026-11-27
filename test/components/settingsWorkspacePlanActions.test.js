@@ -11,7 +11,6 @@ const {
   hasActiveWorkspaceSubscription,
 } = require("../../src/lib/workspaceBilling.ts");
 const en = require("../../src/locales/en/translation.json");
-const de = require("../../src/locales/de/translation.json");
 
 const pricingKey = (suffix) => `settingsPage.account.pricing.${suffix}`;
 const tileKey = (label) => `settingsPage.billing.tiles.${label}`;
@@ -607,7 +606,7 @@ test("the yearly switch sits in the Plans header and picks the yearly or monthly
   );
 });
 
-test("no card advertises meeting hours, in English or German", async (t) => {
+test("no card advertises meeting hours, in English", async (t) => {
   const { container, propsFor, signedOut, render } = await setup(t);
   for (const props of [propsFor([]), propsFor([], signedOut), propsFor([enterprise()])]) {
     await render(props);
@@ -617,7 +616,6 @@ test("no card advertises meeting hours, in English or German", async (t) => {
       const english = resolve(en, key);
       assert.equal(typeof english, "string", `${key} is an English string key`);
       assert.doesNotMatch(english, /hour/i, `${key} mentions hours`);
-      assert.doesNotMatch(String(resolve(de, key)), /stunde/i, `${key} mentions Stunden`);
     }
   }
 });
