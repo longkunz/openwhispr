@@ -40,8 +40,10 @@ npm run build:renderer
 ```
 
 Use `npm run build:win`, `npm run build:mac` or `npm run build:linux` on the
-corresponding host for packaging. Signing credentials and native platform
-acceptance are separate from renderer builds and mocked tests.
+corresponding host for packaging. The Windows command produces an unsigned
+installer for personal use and disables publishing; no Azure signing credentials
+are required. Native platform acceptance is separate from renderer builds and
+mocked tests.
 
 ## Documentation
 
